@@ -1,0 +1,338 @@
+
+
+substitutions:
+  device_name:    mirtek-gw
+  friendly_name:  "Mirtek Gateway"
+  meter_address:  "*****"   # ← адрес с корпуса счётчика (1..65000)
+  poll_interval:  "300s"    # ← интервал опроса (мин. 60s)
+  mqtt_prefix:    "mirtek"  # ← префикс MQTT топиков
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+  libraries:
+    - "SPI"
+    - "SmartRC-CC1101-Driver-Lib=https://github.com/LSatan/SmartRC-CC1101-Driver-Lib"
+    - "CRC=https://github.com/RobTillaart/CRC"
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+logger:
+  level: INFO   # DEBUG или VERBOSE для диагностики
+
+################################################################################
+# Компонент загружается прямо с GitHub — локальные файлы не нужны
+################################################################################
+external_components:
+  - source:
+      type: git
+      url: https://github.com/Alecseyyy/ESPHome-Mirt-830
+      ref: main
+    components: [ mirtek_cc1101 ]
+    refresh: 1d
+
+################################################################################
+# SPI — CC1101
+################################################################################
+spi:
+  clk_pin:  GPIO18
+  mosi_pin: GPIO23
+  miso_pin: GPIO19
+
+################################################################################
+# I2C — OLED SSD1306
+# Дисплей подключается отдельно через стандартный ESPHome display компонент.
+# Раскомментируйте если нужен дисплей.
+################################################################################
+# i2c:
+#   sda: GPIO21
+#   scl: GPIO4
+#   scan: true
+#   frequency: 400kHz
+#
+# font:
+#   - file: "gfonts://Roboto"
+#     id: font_big
+#     size: 16
+#   - file: "gfonts://Roboto"
+#     id: font_small
+#     size: 9
+#
+# display:
+#   - platform: ssd1306_i2c
+#     model: "SSD1306 128x64"
+#     address: 0x3C
+#     update_interval: 5s
+#     lambda: |-
+#       it.printf(0, 0, id(font_small), "Energy: %.2f kWh", id(mirtek_meter).sum_);
+#       it.printf(0, 12, id(font_small), "Power: %.3f kW", id(mirtek_meter).kw_);
+#       it.printf(0, 24, id(font_small), "U: %.1f/%.1f/%.1f V", id(mirtek_meter).v1_, id(mirtek_meter).v2_, id(mirtek_meter).v3_);
+#       it.printf(0, 36, id(font_small), "Relay: %s", id(mirtek_meter).relay_.c_str());
+
+################################################################################
+# Home Assistant API
+################################################################################
+api:
+  encryption:
+    key: !secret ha_api_key
+  services:
+    - service: poll
+      then:
+        - lambda: id(mirtek_meter).poll_all();
+    - service: relay_on
+      then:
+        - lambda: id(mirtek_meter).relay_on();
+    - service: relay_off
+      then:
+        - lambda: id(mirtek_meter).relay_off();
+
+################################################################################
+# OTA
+################################################################################
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+################################################################################
+# WiFi
+################################################################################
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "${friendly_name} Setup"
+    password: "mirtek1234"
+
+captive_portal:
+
+################################################################################
+# MQTT — закомментируйте весь блок если брокера нет
+################################################################################
+mqtt:
+  broker:   !secret mqtt_host
+  port:     !secret mqtt_port
+  username: !secret mqtt_user
+  password: !secret mqtt_pass
+  discovery: true
+  discovery_prefix: homeassistant
+  topic_prefix: "${mqtt_prefix}/${meter_address}"
+  birth_message:
+    topic: "${mqtt_prefix}/${meter_address}/status"
+    payload: "online"
+  will_message:
+    topic: "${mqtt_prefix}/${meter_address}/status"
+    payload: "offline"
+  on_message:
+    topic: "${mqtt_prefix}/${meter_address}/cmd"
+    then:
+      - lambda: |-
+          int v = atoi(x.c_str());
+          if      (v == 1) id(mirtek_meter).poll_all();
+          else if (v == 8) id(mirtek_meter).relay_on();
+          else if (v == 9) id(mirtek_meter).relay_off();
+
+################################################################################
+# Web-сервер
+################################################################################
+web_server:
+  port: 80
+  version: 3
+  include_internal: false
+  auth:
+    username: admin
+    password: !secret web_password
+
+################################################################################
+# Компонент Миртек — все сенсоры задаются здесь
+################################################################################
+mirtek_cc1101:
+  id: mirtek_meter
+  meter_address: ${meter_address}
+  cs_pin:   5
+  gdo0_pin: 22
+
+  # Активная энергия (кВт·ч)
+  energy_sum:
+    name: "Energy Total"
+    icon: mdi:lightning-bolt
+  energy_t1:
+    name: "Energy T1 Day"
+    icon: mdi:weather-sunny
+  energy_t2:
+    name: "Energy T2 Night"
+    icon: mdi:weather-night
+  energy_t3:
+    name: "Energy T3 Peak"
+    icon: mdi:weather-sunset
+
+  # Реактивная энергия (кВАр·ч)
+  reactive_sum:
+    name: "Reactive Energy Total"
+    icon: mdi:sine-wave
+  reactive_t1:
+    name: "Reactive Energy T1"
+  reactive_t2:
+    name: "Reactive Energy T2"
+  reactive_t3:
+    name: "Reactive Energy T3"
+
+  # Мгновенные суммарные
+  power_active:
+    name: "Active Power"
+    icon: mdi:flash
+  power_reactive:
+    name: "Reactive Power"
+  frequency:
+    name: "Grid Frequency"
+  cos_phi:
+    name: "Power Factor"
+
+  # Напряжения
+  voltage_1:
+    name: "Voltage L1"
+  voltage_2:
+    name: "Voltage L2"
+  voltage_3:
+    name: "Voltage L3"
+
+  # Токи
+  current_1:
+    name: "Current L1"
+  current_2:
+    name: "Current L2"
+  current_3:
+    name: "Current L3"
+
+  # Мощности по фазам
+  power_a:
+    name: "Active Power L1"
+  power_b:
+    name: "Active Power L2"
+  power_c:
+    name: "Active Power L3"
+  reactive_a:
+    name: "Reactive Power L1"
+  reactive_b:
+    name: "Reactive Power L2"
+  reactive_c:
+    name: "Reactive Power L3"
+  apparent_a:
+    name: "Apparent Power L1"
+  apparent_b:
+    name: "Apparent Power L2"
+  apparent_c:
+    name: "Apparent Power L3"
+  cos_a:
+    name: "Power Factor L1"
+  cos_b:
+    name: "Power Factor L2"
+  cos_c:
+    name: "Power Factor L3"
+
+  # Прочие
+  temperature:
+    name: "Meter Temperature"
+  battery:
+    name: "Battery Resource"
+
+  # Текстовые сенсоры
+  tariff:
+    name: "Active Tariff"
+    icon: mdi:calendar-clock
+  relay_state:
+    name: "Relay State"
+    icon: mdi:electric-switch
+  seal_state:
+    name: "Seal State"
+    icon: mdi:shield-lock
+  meter_type:
+    name: "Meter Type"
+    icon: mdi:meter-electric
+  firmware:
+    name: "Meter Firmware"
+    icon: mdi:chip
+  meter_date:
+    name: "Meter Date"
+    icon: mdi:calendar
+  meter_time:
+    name: "Meter Time"
+    icon: mdi:clock-outline
+  uptime_meter:
+    name: "Meter Uptime"
+    icon: mdi:timer
+  last_sync:
+    name: "Last Time Sync"
+    icon: mdi:clock-check
+  serial_number:
+    name: "Serial Number"
+    icon: mdi:identifier
+  subscriber:
+    name: "Subscriber"
+    icon: mdi:account
+  status:
+    name: "Gateway Status"
+    icon: mdi:information
+
+  # Бинарные сенсоры
+  three_phase:
+    name: "Three Phase Meter"
+  relay_on:
+    name: "Relay On"
+  seal_ok:
+    name: "Seal OK"
+    device_class: safety
+  cc1101_ok:
+    name: "CC1101 Connected"
+
+################################################################################
+# Интервальный опрос
+################################################################################
+interval:
+  - interval: ${poll_interval}
+    then:
+      - lambda: id(mirtek_meter).poll_all();
+
+################################################################################
+# Системные сенсоры шлюза
+################################################################################
+sensor:
+  - platform: wifi_signal
+    name: "WiFi Signal"
+    update_interval: 60s
+  - platform: uptime
+    name: "Gateway Uptime"
+
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      name: "IP Address"
+    ssid:
+      name: "WiFi SSID"
+
+################################################################################
+# Кнопки
+################################################################################
+button:
+  - platform: template
+    name: "Poll Meter"
+    icon: mdi:refresh
+    on_press:
+      - lambda: id(mirtek_meter).poll_all();
+
+  - platform: template
+    name: "Relay On"
+    icon: mdi:power-plug
+    on_press:
+      - lambda: id(mirtek_meter).relay_on();
+
+  - platform: template
+    name: "Relay Off"
+    icon: mdi:power-plug-off
+    on_press:
+      - lambda: id(mirtek_meter).relay_off();
+
+  - platform: restart
+    name: "Restart Gateway"
