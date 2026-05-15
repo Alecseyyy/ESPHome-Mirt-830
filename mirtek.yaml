@@ -1,513 +1,426 @@
-################################################################################
-# ESPHome прошивка для счётчика Миртек (Star 104/304)
-# Репозиторий: https://github.com/Alecseyyy/ESPHome-Mirt-830
-#
-# Подключение CC1101: SCK→GPIO18, MOSI→GPIO23, MISO→GPIO19, CS→GPIO5, GDO0→GPIO22
-################################################################################
+# =============================================================================
+# Mirtek CC1101 Gateway — ESPHome 2026.4.x
+# Поддержка: ESP32, CC1101 433МГц, счётчики Миртек STAR 104/304
+# GitHub: https://github.com/YOUR_USERNAME/mirtek-esphome
+# =============================================================================
 
 substitutions:
-  device_name:   mirtek-gw
+  device_name: "mirtek-gw"
   friendly_name: "Mirtek Gateway"
-  meter_address: "44629"   # ← адрес с корпуса счётчика
-  poll_interval: "300s"    # ← интервал опроса
-  mqtt_prefix:   "mirtek"  # ← префикс MQTT топиков
+  meter_address: "1"           # <-- Замените на адрес вашего счётчика (1..65000)
+  # SPI пины ESP32 (VSPI по умолчанию)
+  spi_clk:  GPIO18
+  spi_mosi: GPIO23
+  spi_miso: GPIO19
+  cc1101_cs:   GPIO5            # CS/SS для CC1101
+  cc1101_gdo0: GPIO4            # GDO0 от CC1101 (НЕ GPIO22, если используется дисплей!)
+  # I2C для OLED дисплея
+  i2c_sda: GPIO21
+  i2c_scl: GPIO22
+  # Статус LED
+  status_led_pin: GPIO2
 
 esphome:
   name: ${device_name}
   friendly_name: ${friendly_name}
-  libraries:
-    - "SmartRC-CC1101-Driver-Lib=https://github.com/LSatan/SmartRC-CC1101-Driver-Lib"
-    - "CRC=https://github.com/RobTillaart/CRC"
-  includes:
-    - mirtek_cc1101.h
 
 esp32:
   board: esp32dev
   framework:
     type: arduino
+    version: recommended
 
+# =============================================================================
+# Логирование
+# =============================================================================
 logger:
   level: INFO
+  baud_rate: 115200
 
-################################################################################
+# =============================================================================
 # Home Assistant API
-################################################################################
+# =============================================================================
 api:
   encryption:
     key: !secret ha_api_key
-  services:
-    - service: poll
-      then:
-        - lambda: id(mirtek_meter)->poll_all();
-    - service: relay_on
-      then:
-        - lambda: id(mirtek_meter)->relay_on();
-    - service: relay_off
-      then:
-        - lambda: id(mirtek_meter)->relay_off();
 
+# =============================================================================
+# OTA
+# =============================================================================
 ota:
   - platform: esphome
     password: !secret ota_password
 
+# =============================================================================
+# WiFi
+# =============================================================================
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
   ap:
-    ssid: "${friendly_name} Setup"
-    password: "mirtek1234"
+    ssid: "${friendly_name} AP"
+    password: !secret ap_password
 
 captive_portal:
 
-################################################################################
-# MQTT — закомментируйте если не нужен
-################################################################################
-mqtt:
-  broker:   !secret mqtt_host
-  port:     !secret mqtt_port
-  username: !secret mqtt_user
-  password: !secret mqtt_pass
-  discovery: true
-  discovery_prefix: homeassistant
-  topic_prefix: "${mqtt_prefix}/${meter_address}"
-  birth_message:
-    topic: "${mqtt_prefix}/${meter_address}/status"
-    payload: "online"
-  will_message:
-    topic: "${mqtt_prefix}/${meter_address}/status"
-    payload: "offline"
-  on_message:
-    topic: "${mqtt_prefix}/${meter_address}/cmd"
-    then:
-      - lambda: |-
-          int v = atoi(x.c_str());
-          if      (v == 1) id(mirtek_meter)->poll_all();
-          else if (v == 8) id(mirtek_meter)->relay_on();
-          else if (v == 9) id(mirtek_meter)->relay_off();
-
+# =============================================================================
+# Встроенный веб-сервер
+# =============================================================================
 web_server:
   port: 80
-  version: 3
-  include_internal: false
   auth:
     username: admin
     password: !secret web_password
 
+# =============================================================================
+# MQTT
+# =============================================================================
+mqtt:
+  broker: !secret mqtt_broker
+  port: !secret mqtt_port
+  username: !secret mqtt_username
+  password: !secret mqtt_password
+  client_id: "mirtek_gw_${meter_address}"
+  topic_prefix: "mirtek/${meter_address}"
+  birth_message:
+    topic: "mirtek/${meter_address}/status"
+    payload: "online"
+    retain: true
+  will_message:
+    topic: "mirtek/${meter_address}/status"
+    payload: "offline"
+    retain: true
+
+# =============================================================================
+# SPI шина для CC1101
+# =============================================================================
 spi:
-  clk_pin:  GPIO18
-  mosi_pin: GPIO23
-  miso_pin: GPIO19
+  clk_pin: ${spi_clk}
+  mosi_pin: ${spi_mosi}
+  miso_pin: ${spi_miso}
 
-################################################################################
-# custom_component — создаём объект MirtekCC1101
-################################################################################
-custom_component:
-  - lambda: |-
-      auto *c = new MirtekCC1101();
-      c->set_meter_address(${meter_address});
-      c->set_cs_pin(5);
-      c->set_gdo0_pin(22);
-      // Сенсоры энергии
-      c->set_sensor(MSI_SUM,   id(s_sum));
-      c->set_sensor(MSI_T1,    id(s_t1));
-      c->set_sensor(MSI_T2,    id(s_t2));
-      c->set_sensor(MSI_T3,    id(s_t3));
-      c->set_sensor(MSI_SUM_R, id(s_sum_r));
-      c->set_sensor(MSI_T1_R,  id(s_t1_r));
-      c->set_sensor(MSI_T2_R,  id(s_t2_r));
-      c->set_sensor(MSI_T3_R,  id(s_t3_r));
-      // Мгновенные суммарные
-      c->set_sensor(MSI_KW,    id(s_kw));
-      c->set_sensor(MSI_KVAR,  id(s_kvar));
-      c->set_sensor(MSI_FREQ,  id(s_freq));
-      c->set_sensor(MSI_COS,   id(s_cos));
-      // U, I
-      c->set_sensor(MSI_V1,    id(s_v1));
-      c->set_sensor(MSI_V2,    id(s_v2));
-      c->set_sensor(MSI_V3,    id(s_v3));
-      c->set_sensor(MSI_I1,    id(s_i1));
-      c->set_sensor(MSI_I2,    id(s_i2));
-      c->set_sensor(MSI_I3,    id(s_i3));
-      // P, Q, S по фазам
-      c->set_sensor(MSI_PA,    id(s_pa));
-      c->set_sensor(MSI_PB,    id(s_pb));
-      c->set_sensor(MSI_PC,    id(s_pc));
-      c->set_sensor(MSI_QA,    id(s_qa));
-      c->set_sensor(MSI_QB,    id(s_qb));
-      c->set_sensor(MSI_QC,    id(s_qc));
-      c->set_sensor(MSI_SA,    id(s_sa));
-      c->set_sensor(MSI_SB,    id(s_sb));
-      c->set_sensor(MSI_SC,    id(s_sc));
-      // cos phi по фазам
-      c->set_sensor(MSI_CA,    id(s_ca));
-      c->set_sensor(MSI_CB,    id(s_cb));
-      c->set_sensor(MSI_CC,    id(s_cc));
-      // Прочие
-      c->set_sensor(MSI_TEMP,  id(s_temp));
-      c->set_sensor(MSI_BAT,   id(s_bat));
-      // Текстовые сенсоры
-      c->set_text_sensor(MTI_TAR,   id(t_tariff));
-      c->set_text_sensor(MTI_RELAY, id(t_relay));
-      c->set_text_sensor(MTI_SEAL,  id(t_seal));
-      c->set_text_sensor(MTI_TYPE,  id(t_type));
-      c->set_text_sensor(MTI_FW,    id(t_fw));
-      c->set_text_sensor(MTI_DATE,  id(t_date));
-      c->set_text_sensor(MTI_TIME,  id(t_time));
-      c->set_text_sensor(MTI_WORK,  id(t_work));
-      c->set_text_sensor(MTI_SYNC,  id(t_sync));
-      c->set_text_sensor(MTI_SER,   id(t_serial));
-      c->set_text_sensor(MTI_ABON,  id(t_abon));
-      c->set_text_sensor(MTI_ST,    id(t_status));
-      // Бинарные сенсоры
-      c->set_binary_sensor(MBI_3P,   id(b_3phase));
-      c->set_binary_sensor(MBI_REL,  id(b_relay));
-      c->set_binary_sensor(MBI_SEAL, id(b_seal));
-      c->set_binary_sensor(MBI_CC,   id(b_cc1101));
-      App.register_component(c);
-      return {c};
+# =============================================================================
+# I2C шина для OLED
+# =============================================================================
+i2c:
+  sda: ${i2c_sda}
+  scl: ${i2c_scl}
+  scan: true
+  id: i2c_bus
+
+# =============================================================================
+# Кастомный компонент Mirtek CC1101 — загружается из GitHub
+# =============================================================================
+external_components:
+  - source:
+      type: git
+      url: https://github.com/Alecseyyy/ESPHome-Mirt-830
+      ref: main
     components:
-      - id: mirtek_meter
+      - mirtek_cc1101
 
-################################################################################
-# Интервальный опрос
-################################################################################
+mirtek_cc1101:
+  id: mirtek_meter
+  cs_pin:
+    number: ${cc1101_cs}
+    mode:
+      output: true
+  gdo0_pin:
+    number: ${cc1101_gdo0}
+    mode:
+      input: true
+  meter_address: ${meter_address}
+  update_interval: 300s
+
+  # --- Счётчики энергии (кВт·ч) ---
+  energy_sum:
+    name: "Электроэнергия Σ"
+    id: energy_sum
+
+  energy_t1:
+    name: "Электроэнергия Т1 (день)"
+    id: energy_t1
+
+  energy_t2:
+    name: "Электроэнергия Т2 (ночь)"
+    id: energy_t2
+
+  energy_t3:
+    name: "Электроэнергия Т3 (полупик)"
+    id: energy_t3
+
+  # --- Напряжение (В) ---
+  voltage_a:
+    name: "Напряжение фаза A"
+    id: voltage_a
+
+  voltage_b:
+    name: "Напряжение фаза B"
+    id: voltage_b
+
+  voltage_c:
+    name: "Напряжение фаза C"
+    id: voltage_c
+
+  # --- Ток (А) ---
+  current_a:
+    name: "Ток фаза A"
+    id: current_a
+
+  current_b:
+    name: "Ток фаза B"
+    id: current_b
+
+  current_c:
+    name: "Ток фаза C"
+    id: current_c
+
+  # --- Мощность суммарная ---
+  power_active:
+    name: "Активная мощность Σ"
+    id: power_active
+
+  power_reactive:
+    name: "Реактивная мощность Σ"
+    id: power_reactive
+
+  frequency:
+    name: "Частота сети"
+    id: frequency
+
+  power_factor:
+    name: "Cos φ Σ"
+    id: power_factor
+
+  temperature:
+    name: "Температура счётчика"
+    id: meter_temp
+
+  # --- Мощность по фазам (Вт) ---
+  power_a:
+    name: "Активная мощность фаза A"
+    id: power_a
+
+  power_b:
+    name: "Активная мощность фаза B"
+    id: power_b
+
+  power_c:
+    name: "Активная мощность фаза C"
+    id: power_c
+
+  reactive_a:
+    name: "Реактивная мощность фаза A"
+    id: reactive_a
+
+  reactive_b:
+    name: "Реактивная мощность фаза B"
+    id: reactive_b
+
+  reactive_c:
+    name: "Реактивная мощность фаза C"
+    id: reactive_c
+
+  apparent_a:
+    name: "Полная мощность фаза A"
+    id: apparent_a
+
+  apparent_b:
+    name: "Полная мощность фаза B"
+    id: apparent_b
+
+  apparent_c:
+    name: "Полная мощность фаза C"
+    id: apparent_c
+
+  pf_a:
+    name: "Cos φ фаза A"
+    id: pf_a
+
+  pf_b:
+    name: "Cos φ фаза B"
+    id: pf_b
+
+  pf_c:
+    name: "Cos φ фаза C"
+    id: pf_c
+
+  # --- Текстовые датчики ---
+  tariff:
+    name: "Текущий тариф"
+    id: tariff_now
+
+  relay_state:
+    name: "Состояние реле"
+    id: relay_state_ts
+
+  seal_state:
+    name: "Состояние пломб"
+    id: seal_state_ts
+
+  hw_version:
+    name: "Версия платы HW"
+    id: hw_ver
+
+  sw_version:
+    name: "Версия ПО SW"
+    id: sw_ver
+
+  meter_type:
+    name: "Тип счётчика"
+    id: meter_type_ts
+
+  meter_datetime:
+    name: "Время счётчика"
+    id: meter_datetime_ts
+
+  last_status:
+    name: "Статус опроса"
+    id: last_status_ts
+
+  # --- Бинарные датчики ---
+  seal_cover:
+    name: "Вскрытие корпуса"
+    id: seal_cover_bs
+
+  seal_terminal:
+    name: "Вскрытие клеммной крышки"
+    id: seal_terminal_bs
+
+  seal_module:
+    name: "Вскрытие модуля связи"
+    id: seal_module_bs
+
+  magnet_dc:
+    name: "Постоянный магнит"
+    id: magnet_dc_bs
+
+  magnet_ac:
+    name: "Переменный магнит"
+    id: magnet_ac_bs
+
+  relay_on:
+    name: "Реле включено"
+    id: relay_on_bs
+
+  current_imbalance:
+    name: "Небаланс токов"
+    id: current_imbalance_bs
+
+  time_synced:
+    name: "Синхронизация времени"
+    id: time_synced_bs
+
+# =============================================================================
+# OLED Дисплей SSD1306 128x64 (I2C, 0x3C)
+# Если дисплея нет — закомментируйте блоки font, globals, interval, display
+# =============================================================================
+font:
+  - file: "gfonts://Roboto"
+    id: font_small
+    size: 11
+
+globals:
+  - id: display_page
+    type: int
+    restore_value: no
+    initial_value: "0"
+
 interval:
-  - interval: ${poll_interval}
+  - interval: 5s
     then:
-      - lambda: id(mirtek_meter)->poll_all();
+      - lambda: |-
+          id(display_page) = (id(display_page) + 1) % 4;
 
-################################################################################
-# СЕНСОРЫ
-################################################################################
+display:
+  - platform: ssd1306_i2c
+    model: "SSD1306 128x64"
+    address: 0x3C
+    id: oled_display
+    update_interval: 1s
+    lambda: |-
+      switch (id(display_page)) {
+        case 0:
+          it.printf(0,  0, id(font_small), "=== ЭНЕРГИЯ ===");
+          it.printf(0, 13, id(font_small), "Sum: %.2f kWh", id(energy_sum).state);
+          it.printf(0, 26, id(font_small), "T1:  %.2f kWh", id(energy_t1).state);
+          it.printf(0, 39, id(font_small), "T2:  %.2f kWh", id(energy_t2).state);
+          it.printf(0, 52, id(font_small), "T3:  %.2f kWh", id(energy_t3).state);
+          break;
+        case 1:
+          it.printf(0,  0, id(font_small), "=== U / I ===");
+          it.printf(0, 13, id(font_small), "Ua:%.1fV Ia:%.2fA", id(voltage_a).state, id(current_a).state);
+          it.printf(0, 26, id(font_small), "Ub:%.1fV Ib:%.2fA", id(voltage_b).state, id(current_b).state);
+          it.printf(0, 39, id(font_small), "Uc:%.1fV Ic:%.2fA", id(voltage_c).state, id(current_c).state);
+          it.printf(0, 52, id(font_small), "f: %.2f Hz", id(frequency).state);
+          break;
+        case 2:
+          it.printf(0,  0, id(font_small), "=== МОЩНОСТЬ ===");
+          it.printf(0, 13, id(font_small), "P:  %.0f W", id(power_active).state);
+          it.printf(0, 26, id(font_small), "Q:  %.3f kVAr", id(power_reactive).state);
+          it.printf(0, 39, id(font_small), "cos:%.2f T:%.1fC", id(power_factor).state, id(meter_temp).state);
+          it.printf(0, 52, id(font_small), "%s", id(tariff_now).state.c_str());
+          break;
+        case 3:
+          it.printf(0,  0, id(font_small), "=== СТАТУС ===");
+          it.printf(0, 13, id(font_small), "Реле: %s", id(relay_state_ts).state.c_str());
+          it.printf(0, 26, id(font_small), "HW:%s SW:%s", id(hw_ver).state.c_str(), id(sw_ver).state.c_str());
+          it.printf(0, 39, id(font_small), "%s", id(seal_state_ts).state.c_str());
+          it.printf(0, 52, id(font_small), "%s", id(last_status_ts).state.c_str());
+          break;
+      }
+
+# =============================================================================
+# Статус LED
+# =============================================================================
+status_led:
+  pin:
+    number: ${status_led_pin}
+    inverted: false
+
+# =============================================================================
+# Кнопки управления
+# =============================================================================
+button:
+  - platform: restart
+    name: "Перезагрузка"
+
+# =============================================================================
+# NTP время
+# =============================================================================
+time:
+  - platform: sntp
+    id: ntp_time
+    timezone: "Europe/Moscow"
+    servers:
+      - "pool.ntp.org"
+      - "time.google.com"
+
+# =============================================================================
+# Диагностика
+# =============================================================================
 sensor:
-  # Активная энергия (kWh)
-  - platform: template
-    name: "Energy Total"
-    id: s_sum
-    unit_of_measurement: "kWh"
-    device_class: energy
-    state_class: total_increasing
-    accuracy_decimals: 2
-    icon: mdi:lightning-bolt
-  - platform: template
-    name: "Energy T1 Day"
-    id: s_t1
-    unit_of_measurement: "kWh"
-    device_class: energy
-    state_class: total_increasing
-    accuracy_decimals: 2
-    icon: mdi:weather-sunny
-  - platform: template
-    name: "Energy T2 Night"
-    id: s_t2
-    unit_of_measurement: "kWh"
-    device_class: energy
-    state_class: total_increasing
-    accuracy_decimals: 2
-    icon: mdi:weather-night
-  - platform: template
-    name: "Energy T3 Peak"
-    id: s_t3
-    unit_of_measurement: "kWh"
-    device_class: energy
-    state_class: total_increasing
-    accuracy_decimals: 2
-    icon: mdi:weather-sunset
-  # Реактивная энергия (kvarh)
-  - platform: template
-    name: "Reactive Energy Total"
-    id: s_sum_r
-    unit_of_measurement: "kvarh"
-    state_class: total_increasing
-    accuracy_decimals: 2
-    icon: mdi:sine-wave
-  - platform: template
-    name: "Reactive Energy T1"
-    id: s_t1_r
-    unit_of_measurement: "kvarh"
-    state_class: total_increasing
-    accuracy_decimals: 2
-  - platform: template
-    name: "Reactive Energy T2"
-    id: s_t2_r
-    unit_of_measurement: "kvarh"
-    state_class: total_increasing
-    accuracy_decimals: 2
-  - platform: template
-    name: "Reactive Energy T3"
-    id: s_t3_r
-    unit_of_measurement: "kvarh"
-    state_class: total_increasing
-    accuracy_decimals: 2
-  # Мощность суммарная
-  - platform: template
-    name: "Active Power"
-    id: s_kw
-    unit_of_measurement: "kW"
-    device_class: power
-    state_class: measurement
-    accuracy_decimals: 3
-    icon: mdi:flash
-  - platform: template
-    name: "Reactive Power"
-    id: s_kvar
-    unit_of_measurement: "kvar"
-    state_class: measurement
-    accuracy_decimals: 3
-  - platform: template
-    name: "Grid Frequency"
-    id: s_freq
-    unit_of_measurement: "Hz"
-    device_class: frequency
-    state_class: measurement
-    accuracy_decimals: 2
-  - platform: template
-    name: "Power Factor"
-    id: s_cos
-    unit_of_measurement: ""
-    state_class: measurement
-    accuracy_decimals: 3
-  # Напряжения
-  - platform: template
-    name: "Voltage L1"
-    id: s_v1
-    unit_of_measurement: "V"
-    device_class: voltage
-    state_class: measurement
-    accuracy_decimals: 1
-  - platform: template
-    name: "Voltage L2"
-    id: s_v2
-    unit_of_measurement: "V"
-    device_class: voltage
-    state_class: measurement
-    accuracy_decimals: 1
-  - platform: template
-    name: "Voltage L3"
-    id: s_v3
-    unit_of_measurement: "V"
-    device_class: voltage
-    state_class: measurement
-    accuracy_decimals: 1
-  # Токи
-  - platform: template
-    name: "Current L1"
-    id: s_i1
-    unit_of_measurement: "A"
-    device_class: current
-    state_class: measurement
-    accuracy_decimals: 3
-  - platform: template
-    name: "Current L2"
-    id: s_i2
-    unit_of_measurement: "A"
-    device_class: current
-    state_class: measurement
-    accuracy_decimals: 3
-  - platform: template
-    name: "Current L3"
-    id: s_i3
-    unit_of_measurement: "A"
-    device_class: current
-    state_class: measurement
-    accuracy_decimals: 3
-  # Активная мощность по фазам
-  - platform: template
-    name: "Active Power L1"
-    id: s_pa
-    unit_of_measurement: "W"
-    device_class: power
-    state_class: measurement
-    accuracy_decimals: 0
-  - platform: template
-    name: "Active Power L2"
-    id: s_pb
-    unit_of_measurement: "W"
-    device_class: power
-    state_class: measurement
-    accuracy_decimals: 0
-  - platform: template
-    name: "Active Power L3"
-    id: s_pc
-    unit_of_measurement: "W"
-    device_class: power
-    state_class: measurement
-    accuracy_decimals: 0
-  # Реактивная мощность по фазам
-  - platform: template
-    name: "Reactive Power L1"
-    id: s_qa
-    unit_of_measurement: "var"
-    state_class: measurement
-    accuracy_decimals: 0
-  - platform: template
-    name: "Reactive Power L2"
-    id: s_qb
-    unit_of_measurement: "var"
-    state_class: measurement
-    accuracy_decimals: 0
-  - platform: template
-    name: "Reactive Power L3"
-    id: s_qc
-    unit_of_measurement: "var"
-    state_class: measurement
-    accuracy_decimals: 0
-  # Полная мощность по фазам
-  - platform: template
-    name: "Apparent Power L1"
-    id: s_sa
-    unit_of_measurement: "VA"
-    state_class: measurement
-    accuracy_decimals: 0
-  - platform: template
-    name: "Apparent Power L2"
-    id: s_sb
-    unit_of_measurement: "VA"
-    state_class: measurement
-    accuracy_decimals: 0
-  - platform: template
-    name: "Apparent Power L3"
-    id: s_sc
-    unit_of_measurement: "VA"
-    state_class: measurement
-    accuracy_decimals: 0
-  # cos phi по фазам
-  - platform: template
-    name: "Power Factor L1"
-    id: s_ca
-    unit_of_measurement: ""
-    state_class: measurement
-    accuracy_decimals: 3
-  - platform: template
-    name: "Power Factor L2"
-    id: s_cb
-    unit_of_measurement: ""
-    state_class: measurement
-    accuracy_decimals: 3
-  - platform: template
-    name: "Power Factor L3"
-    id: s_cc
-    unit_of_measurement: ""
-    state_class: measurement
-    accuracy_decimals: 3
-  # Прочие
-  - platform: template
-    name: "Meter Temperature"
-    id: s_temp
-    unit_of_measurement: "°C"
-    device_class: temperature
-    state_class: measurement
-    accuracy_decimals: 0
-  - platform: template
-    name: "Battery Resource"
-    id: s_bat
-    unit_of_measurement: "%"
-    device_class: battery
-    state_class: measurement
-    accuracy_decimals: 0
-  # Системные
   - platform: wifi_signal
-    name: "WiFi Signal"
+    name: "WiFi RSSI"
     update_interval: 60s
-  - platform: uptime
-    name: "Gateway Uptime"
+    entity_category: diagnostic
 
-################################################################################
-# ТЕКСТОВЫЕ СЕНСОРЫ
-################################################################################
+  - platform: uptime
+    name: "Uptime"
+    entity_category: diagnostic
+
 text_sensor:
-  - platform: template
-    name: "Active Tariff"
-    id: t_tariff
-    icon: mdi:calendar-clock
-  - platform: template
-    name: "Relay State"
-    id: t_relay
-    icon: mdi:electric-switch
-  - platform: template
-    name: "Seal State"
-    id: t_seal
-    icon: mdi:shield-lock
-  - platform: template
-    name: "Meter Type"
-    id: t_type
-    icon: mdi:meter-electric
-  - platform: template
-    name: "Meter Firmware"
-    id: t_fw
-    icon: mdi:chip
-  - platform: template
-    name: "Meter Date"
-    id: t_date
-    icon: mdi:calendar
-  - platform: template
-    name: "Meter Time"
-    id: t_time
-    icon: mdi:clock-outline
-  - platform: template
-    name: "Meter Uptime"
-    id: t_work
-    icon: mdi:timer
-  - platform: template
-    name: "Last Time Sync"
-    id: t_sync
-    icon: mdi:clock-check
-  - platform: template
-    name: "Serial Number"
-    id: t_serial
-    icon: mdi:identifier
-  - platform: template
-    name: "Subscriber"
-    id: t_abon
-    icon: mdi:account
-  - platform: template
-    name: "Gateway Status"
-    id: t_status
-    icon: mdi:information
   - platform: wifi_info
     ip_address:
-      name: "IP Address"
+      name: "IP адрес"
+      entity_category: diagnostic
     ssid:
       name: "WiFi SSID"
+      entity_category: diagnostic
+    mac_address:
+      name: "MAC адрес"
+      entity_category: diagnostic
 
-################################################################################
-# БИНАРНЫЕ СЕНСОРЫ
-################################################################################
-binary_sensor:
-  - platform: template
-    name: "Three Phase Meter"
-    id: b_3phase
-  - platform: template
-    name: "Relay On"
-    id: b_relay
-    device_class: power
-  - platform: template
-    name: "Seal OK"
-    id: b_seal
-    device_class: safety
-  - platform: template
-    name: "CC1101 Connected"
-    id: b_cc1101
-    device_class: connectivity
-
-################################################################################
-# КНОПКИ
-################################################################################
-button:
-  - platform: template
-    name: "Poll Meter"
-    icon: mdi:refresh
-    on_press:
-      - lambda: id(mirtek_meter)->poll_all();
-  - platform: template
-    name: "Relay On"
-    icon: mdi:power-plug
-    on_press:
-      - lambda: id(mirtek_meter)->relay_on();
-  - platform: template
-    name: "Relay Off"
-    icon: mdi:power-plug-off
-    on_press:
-      - lambda: id(mirtek_meter)->relay_off();
-  - platform: restart
-    name: "Restart Gateway"
+  - platform: version
+    name: "ESPHome версия"
+    entity_category: diagnostic
