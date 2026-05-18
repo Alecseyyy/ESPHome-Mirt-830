@@ -1,330 +1,526 @@
 #pragma once
-
+// =============================================================================
+// Mirtek CC1101 ESPHome Component — ESPHome 2026.4.x
+// Протокол: Star v1.20 (Mirtek Star 104 / Star 304)
+// =============================================================================
 #include "esphome/core/component.h"
 #include "esphome/core/hal.h"
+#include "esphome/core/log.h"
 #include "esphome/components/sensor/sensor.h"
 #include "esphome/components/text_sensor/text_sensor.h"
 #include "esphome/components/binary_sensor/binary_sensor.h"
-#include "esphome/components/spi/spi.h"
-
+#include <SPI.h>
 #include <vector>
-#include <string>
+#include <cmath>
+#include <cstdio>
 
 namespace esphome {
 namespace mirtek_cc1101 {
 
-// CRC8 calculation with polynomial 0xA9
-static uint8_t crc8_a9(const uint8_t *data, size_t len) {
-  uint8_t crc = 0x00;
-  for (size_t idx = 0; idx < len; idx++) {
-    uint8_t b = data[idx];
-    for (int i = 0; i < 8; i++) {
-      if (((b ^ crc) & 0x80) == 0) {
-        crc = (uint8_t)(crc << 1);
-      } else {
-        crc = (uint8_t)((crc << 1) ^ 0xA9);
-      }
-      b = (uint8_t)(b << 1);
+static const char *const TAG = "mirtek";
+
+// ─── CRC8 poly 0xA9 ──────────────────────────────────────────────────────────
+static uint8_t crc8(const uint8_t *d, size_t n) {
+  uint8_t c = 0;
+  for (size_t i = 0; i < n; i++) {
+    uint8_t b = d[i];
+    for (int j = 0; j < 8; j++) {
+      c = ((b ^ c) & 0x80) ? (uint8_t)((c << 1) ^ 0xA9) : (uint8_t)(c << 1);
+      b <<= 1;
     }
   }
-  return crc;
+  return c;
 }
 
-// CC1101 SPI register addresses
-static const uint8_t CC1101_IOCFG2   = 0x00;
-static const uint8_t CC1101_IOCFG0   = 0x02;
-static const uint8_t CC1101_FIFOTHR  = 0x03;
-static const uint8_t CC1101_SYNC1    = 0x04;
-static const uint8_t CC1101_SYNC0    = 0x05;
-static const uint8_t CC1101_PKTLEN   = 0x06;
-static const uint8_t CC1101_PKTCTRL1 = 0x07;
-static const uint8_t CC1101_PKTCTRL0 = 0x08;
-static const uint8_t CC1101_ADDR     = 0x09;
-static const uint8_t CC1101_CHANNR   = 0x0A;
-static const uint8_t CC1101_FSCTRL1  = 0x0B;
-static const uint8_t CC1101_FSCTRL0  = 0x0C;
-static const uint8_t CC1101_FREQ2    = 0x0D;
-static const uint8_t CC1101_FREQ1    = 0x0E;
-static const uint8_t CC1101_FREQ0    = 0x0F;
-static const uint8_t CC1101_MDMCFG4  = 0x10;
-static const uint8_t CC1101_MDMCFG3  = 0x11;
-static const uint8_t CC1101_MDMCFG2  = 0x12;
-static const uint8_t CC1101_MDMCFG1  = 0x13;
-static const uint8_t CC1101_MDMCFG0  = 0x14;
-static const uint8_t CC1101_DEVIATN  = 0x15;
-static const uint8_t CC1101_MCSM2    = 0x16;
-static const uint8_t CC1101_MCSM1    = 0x17;
-static const uint8_t CC1101_MCSM0    = 0x18;
-static const uint8_t CC1101_FOCCFG   = 0x19;
-static const uint8_t CC1101_BSCFG    = 0x1A;
-static const uint8_t CC1101_AGCCTRL2 = 0x1B;
-static const uint8_t CC1101_AGCCTRL1 = 0x1C;
-static const uint8_t CC1101_AGCCTRL0 = 0x1D;
-static const uint8_t CC1101_WOREVT1  = 0x1E;
-static const uint8_t CC1101_WOREVT0  = 0x1F;
-static const uint8_t CC1101_WORCTRL  = 0x20;
-static const uint8_t CC1101_FREND1   = 0x21;
-static const uint8_t CC1101_FREND0   = 0x22;
-static const uint8_t CC1101_FSCAL3   = 0x23;
-static const uint8_t CC1101_FSCAL2   = 0x24;
-static const uint8_t CC1101_FSCAL1   = 0x25;
-static const uint8_t CC1101_FSCAL0   = 0x26;
-static const uint8_t CC1101_RCCTRL1  = 0x27;
-static const uint8_t CC1101_RCCTRL0  = 0x28;
-static const uint8_t CC1101_FSTEST   = 0x29;
-static const uint8_t CC1101_PTEST    = 0x2A;
-static const uint8_t CC1101_AGCTEST  = 0x2B;
-static const uint8_t CC1101_TEST2    = 0x2C;
-static const uint8_t CC1101_TEST1    = 0x2D;
-static const uint8_t CC1101_TEST0    = 0x2E;
+// ─── CC1101 registers / strobes ──────────────────────────────────────────────
+static const uint8_t CC_SRES  = 0x30, CC_SCAL  = 0x33, CC_SRX   = 0x34;
+static const uint8_t CC_STX   = 0x35, CC_SIDLE = 0x36, CC_SFRX  = 0x3A;
+static const uint8_t CC_SFTX  = 0x3B, CC_BURST = 0x40, CC_READ  = 0x80;
+static const uint8_t CC_TXFIFO = 0x3F, CC_RXFIFO = 0x3F;
+static const uint8_t CC_RXBYTES = 0x3B, CC_PARTNUM = 0x30, CC_VERSION = 0x31;
+static const uint8_t CC_PA_TABLE = 0x3E;
 
-// CC1101 Status registers (read-only, access via 0xC0 | addr)
-static const uint8_t CC1101_PARTNUM  = 0x30;
-static const uint8_t CC1101_VERSION  = 0x31;
-static const uint8_t CC1101_RXBYTES  = 0x3B;
-static const uint8_t CC1101_TXBYTES  = 0x3A;
-
-// CC1101 command strobes
-static const uint8_t CC1101_SRES  = 0x30;
-static const uint8_t CC1101_SCAL  = 0x33;
-static const uint8_t CC1101_SRX   = 0x34;
-static const uint8_t CC1101_STX   = 0x35;
-static const uint8_t CC1101_SIDLE = 0x36;
-static const uint8_t CC1101_SFRX  = 0x3A;
-static const uint8_t CC1101_SFTX  = 0x3B;
-
-// CC1101 FIFO access
-static const uint8_t CC1101_TXFIFO = 0x3F;
-static const uint8_t CC1101_RXFIFO = 0x3F;
-static const uint8_t CC1101_BURST  = 0x40;
-static const uint8_t CC1101_READ   = 0x80;
-static const uint8_t CC1101_PA_TABLE = 0x3E;
-
-// Mirtek RF settings for 433 MHz
-static const uint8_t MIRTEK_RF_SETTINGS[] = {
-  0x0D,  // IOCFG2
-  0x2E,  // IOCFG1
-  0x06,  // IOCFG0
-  0x4F,  // FIFOTHR
-  0xD3,  // SYNC1
-  0x91,  // SYNC0
-  0x3C,  // PKTLEN
-  0x00,  // PKTCTRL1
-  0x41,  // PKTCTRL0
-  0x00,  // ADDR
-  0x16,  // CHANNR
-  0x0F,  // FSCTRL1
-  0x00,  // FSCTRL0
-  0x10,  // FREQ2
-  0x8B,  // FREQ1
-  0x54,  // FREQ0
-  0xD9,  // MDMCFG4
-  0x83,  // MDMCFG3
-  0x13,  // MDMCFG2
-  0xD2,  // MDMCFG1
-  0xAA,  // MDMCFG0
-  0x31,  // DEVIATN
-  0x07,  // MCSM2
-  0x0C,  // MCSM1
-  0x08,  // MCSM0
-  0x16,  // FOCCFG
-  0x6C,  // BSCFG
-  0x03,  // AGCCTRL2
-  0x40,  // AGCCTRL1
-  0x91,  // AGCCTRL0
-  0x87,  // WOREVT1
-  0x6B,  // WOREVT0
-  0xF8,  // WORCTRL
-  0x56,  // FREND1
-  0x10,  // FREND0
-  0xE9,  // FSCAL3
-  0x2A,  // FSCAL2
-  0x00,  // FSCAL1
-  0x1F,  // FSCAL0
-  0x41,  // RCCTRL1
-  0x00,  // RCCTRL0
-  0x59,  // FSTEST
-  0x59,  // PTEST
-  0x3F,  // AGCTEST
-  0x81,  // TEST2
-  0x35,  // TEST1
-  0x09,  // TEST0
+// RF settings for 433 MHz / FSK / Mirtek protocol
+static const uint8_t RF_CFG[] = {
+  0x0D,0x2E,0x06,0x4F,0xD3,0x91,0x3C,0x00,
+  0x41,0x00,0x16,0x0F,0x00,0x10,0x8B,0x54,
+  0xD9,0x83,0x13,0xD2,0xAA,0x31,0x07,0x0C,
+  0x08,0x16,0x6C,0x03,0x40,0x91,0x87,0x6B,
+  0xF8,0x56,0x10,0xE9,0x2A,0x00,0x1F,0x41,
+  0x00,0x59,0x59,0x3F,0x81,0x35,0x09
 };
 
+// ─── Sensor index constants (match __init__.py SENSORS list order) ────────────
+enum SensorIdx {
+  SI_SUM=0, SI_T1, SI_T2, SI_T3,
+  SI_SUM_R, SI_T1_R, SI_T2_R, SI_T3_R,
+  SI_KW, SI_KVAR, SI_FREQ, SI_COS,
+  SI_V1, SI_V2, SI_V3,
+  SI_I1, SI_I2, SI_I3,
+  SI_PA, SI_PB, SI_PC,
+  SI_QA, SI_QB, SI_QC,
+  SI_SA, SI_SB, SI_SC,
+  SI_CA, SI_CB, SI_CC,
+  SI_TEMP, SI_BAT,
+  SI_COUNT
+};
+enum TextIdx  { TI_TARIFF=0, TI_RELAY, TI_SEAL, TI_TYPE, TI_FW, TI_DATE, TI_TIME, TI_WORK, TI_SYNC, TI_SERIAL, TI_ABON, TI_STATUS, TI_COUNT };
+enum BinIdx   { BI_3PHASE=0, BI_RELAY, BI_SEAL_OK, BI_CC1101, BI_COUNT };
+
+// ─── Component class ─────────────────────────────────────────────────────────
 class MirtekCC1101 : public PollingComponent {
  public:
-  void set_cs_pin(GPIOPin *cs) { cs_pin_ = cs; }
-  void set_gdo0_pin(GPIOPin *gdo0) { gdo0_pin_ = gdo0; }
-  void set_meter_address(uint16_t addr) { meter_address_ = addr; }
-  void set_poll_interval_min(uint32_t min) { poll_interval_min_ = min; }
+  // Called by ESPHome code-gen (from __init__.py to_code)
+  void set_cs_pin(GPIOPin *p)   { cs_   = p; }
+  void set_gdo0_pin(GPIOPin *p) { gdo0_ = p; }
+  void set_meter_address(int a) { addr_ = (uint16_t)a; }
+  void set_sensor(int i, sensor::Sensor *s)             { if (i < SI_COUNT)  ss_[i] = s; }
+  void set_text_sensor(int i, text_sensor::TextSensor *s){ if (i < TI_COUNT)  ts_[i] = s; }
+  void set_binary_sensor(int i, binary_sensor::BinarySensor *s){ if (i < BI_COUNT) bs_[i] = s; }
 
-  // Energy sensors (3 tariffs + sum)
-  void set_energy_sum(sensor::Sensor *s) { energy_sum_ = s; }
-  void set_energy_t1(sensor::Sensor *s) { energy_t1_ = s; }
-  void set_energy_t2(sensor::Sensor *s) { energy_t2_ = s; }
-  void set_energy_t3(sensor::Sensor *s) { energy_t3_ = s; }
+  // ── Setup ──────────────────────────────────────────────────────────────────
+  void setup() override {
+    ESP_LOGI(TAG, "Init CC1101 addr=%u", addr_);
+    cs_->setup();
+    cs_->digital_write(true);
+    if (gdo0_) gdo0_->setup();
 
-  // Instantaneous measurement sensors
-  void set_voltage_a(sensor::Sensor *s) { voltage_a_ = s; }
-  void set_voltage_b(sensor::Sensor *s) { voltage_b_ = s; }
-  void set_voltage_c(sensor::Sensor *s) { voltage_c_ = s; }
-  void set_current_a(sensor::Sensor *s) { current_a_ = s; }
-  void set_current_b(sensor::Sensor *s) { current_b_ = s; }
-  void set_current_c(sensor::Sensor *s) { current_c_ = s; }
-  void set_power_active(sensor::Sensor *s) { power_active_ = s; }
-  void set_power_reactive(sensor::Sensor *s) { power_reactive_ = s; }
-  void set_frequency(sensor::Sensor *s) { frequency_ = s; }
-  void set_power_factor(sensor::Sensor *s) { power_factor_ = s; }
-  void set_temperature(sensor::Sensor *s) { temperature_ = s; }
+    SPI.begin();
+    SPI.setFrequency(4000000);
+    SPI.setBitOrder(MSBFIRST);
+    SPI.setDataMode(SPI_MODE0);
 
-  // Per-phase power sensors
-  void set_power_a(sensor::Sensor *s) { power_a_ = s; }
-  void set_power_b(sensor::Sensor *s) { power_b_ = s; }
-  void set_power_c(sensor::Sensor *s) { power_c_ = s; }
-  void set_reactive_a(sensor::Sensor *s) { reactive_a_ = s; }
-  void set_reactive_b(sensor::Sensor *s) { reactive_b_ = s; }
-  void set_reactive_c(sensor::Sensor *s) { reactive_c_ = s; }
-  void set_apparent_a(sensor::Sensor *s) { apparent_a_ = s; }
-  void set_apparent_b(sensor::Sensor *s) { apparent_b_ = s; }
-  void set_apparent_c(sensor::Sensor *s) { apparent_c_ = s; }
-  void set_pf_a(sensor::Sensor *s) { pf_a_ = s; }
-  void set_pf_b(sensor::Sensor *s) { pf_b_ = s; }
-  void set_pf_c(sensor::Sensor *s) { pf_c_ = s; }
+    bool ok = cc_init_();
+    pub_bin_(BI_CC1101, ok);
+    pub_txt_(TI_STATUS, ok ? "CC1101 OK" : "CC1101 ERR");
+    if (!ok) ESP_LOGE(TAG, "CC1101 not found! Check SPI wiring.");
+    else      ESP_LOGI(TAG, "CC1101 ready, polling every %us", (unsigned)(get_update_interval()/1000));
+  }
 
-  // Text sensors
-  void set_tariff_text(text_sensor::TextSensor *s) { tariff_text_ = s; }
-  void set_relay_state(text_sensor::TextSensor *s) { relay_state_ = s; }
-  void set_seal_state(text_sensor::TextSensor *s) { seal_state_ = s; }
-  void set_hw_version(text_sensor::TextSensor *s) { hw_version_ = s; }
-  void set_sw_version(text_sensor::TextSensor *s) { sw_version_ = s; }
-  void set_meter_type(text_sensor::TextSensor *s) { meter_type_ = s; }
-  void set_meter_datetime(text_sensor::TextSensor *s) { meter_datetime_ = s; }
-  void set_last_status(text_sensor::TextSensor *s) { last_status_ = s; }
+  void dump_config() override {
+    ESP_LOGCONFIG(TAG, "Mirtek CC1101 Gateway:");
+    ESP_LOGCONFIG(TAG, "  Meter address : %u", addr_);
+    ESP_LOGCONFIG(TAG, "  Poll interval : %u ms", get_update_interval());
+    LOG_PIN("  CS   pin: ", cs_);
+    LOG_PIN("  GDO0 pin: ", gdo0_);
+  }
 
-  // Binary sensors (seals / status flags)
-  void set_seal_cover(binary_sensor::BinarySensor *s) { seal_cover_ = s; }
-  void set_seal_terminal(binary_sensor::BinarySensor *s) { seal_terminal_ = s; }
-  void set_seal_module(binary_sensor::BinarySensor *s) { seal_module_ = s; }
-  void set_magnet_dc(binary_sensor::BinarySensor *s) { magnet_dc_ = s; }
-  void set_magnet_ac(binary_sensor::BinarySensor *s) { magnet_ac_ = s; }
-  void set_relay_on(binary_sensor::BinarySensor *s) { relay_on_ = s; }
-  void set_current_imbalance(binary_sensor::BinarySensor *s) { current_imbalance_ = s; }
-  void set_time_synced(binary_sensor::BinarySensor *s) { time_synced_ = s; }
+  // ── Poll (called on update_interval) ─────────────────────────────────────
+  void update() override { poll_all(); }
 
-  void setup() override;
-  void update() override;
-  void dump_config() override;
+  void poll_all() {
+    ESP_LOGI(TAG, "=== Poll addr=%u ===", addr_);
+    poll_count_++;
 
-  // Public data for display use
-  float energy_sum_val{NAN}, energy_t1_val{NAN}, energy_t2_val{NAN}, energy_t3_val{NAN};
-  float va{NAN}, vb{NAN}, vc{NAN};
-  float ia{NAN}, ib{NAN}, ic{NAN};
-  float p_total{NAN}, q_total{NAN}, freq{NAN}, pf{NAN};
-  float temp{NAN};
-  float pa{NAN}, pb{NAN}, pc{NAN};
-  std::string tariff_str{"N/A"};
-  std::string relay_str{"N/A"};
-  std::string seal_str{"N/A"};
-  std::string hw_str{"N/A"};
-  std::string sw_str{"N/A"};
-  std::string meter_type_str{"Не определён"};
-  std::string datetime_str{"N/A"};
-  bool three_phase{true};
+    // 1. Тип + дата/время (0x1C)
+    bool ok1 = do_cmd_(0x1C, -1, -1, 3) && parse_datetime_();
+    // 2. Энергия (0x05, sub=0x04)
+    bool ok2 = do_cmd_(0x05, 0x04, -1, 4) && parse_energy_();
+    // 3. Мгновенные сумма (0x2B, sub=0x00)
+    bool ok3 = do_cmd_(0x2B, 0x00, -1, 4) && parse_instant_();
+    // 4. Мгновенные по фазам (0x2B, sub=0x10) — только 3ф
+    bool ok4 = true;
+    if (three_phase_) ok4 = do_cmd_(0x2B, 0x10, -1, 4) && parse_phase_();
+    // 5. Расширенная инфо (0x01) — раз в час
+    if (poll_count_ % 12 == 1) do_cmd_(0x01, -1, -1, 5) && parse_ident_();
+    // 6. Батарейка (0x1E) — раз в час
+    if (poll_count_ % 12 == 1) do_cmd_(0x1E, -1, -1, 3) && parse_battery_();
+
+    bool all_ok = ok1 && ok2 && ok3 && ok4;
+    pub_txt_(TI_STATUS, all_ok ? "OK" : "PARTIAL");
+    ESP_LOGI(TAG, "=== Done (%s) ===", all_ok ? "OK" : "partial");
+  }
+
+  void relay_on()  { send_relay_(0x08); }
+  void relay_off() { send_relay_(0x09); }
 
  protected:
-  // SPI helpers
-  void spi_begin_();
-  void spi_end_();
-  void cc1101_reset_();
-  void cc1101_write_reg_(uint8_t addr, uint8_t val);
-  void cc1101_write_burst_(uint8_t addr, const uint8_t *data, size_t len);
-  uint8_t cc1101_read_reg_(uint8_t addr);
-  uint8_t cc1101_strobe_(uint8_t cmd);
-  bool cc1101_init_();
-  bool cc1101_check_();
+  GPIOPin *cs_{nullptr}, *gdo0_{nullptr};
+  uint16_t addr_{1};
+  bool three_phase_{true};
+  uint32_t poll_count_{0};
 
-  // RF packet helpers
-  void build_short_packet_(uint8_t cmd, uint8_t packet_type);
-  void build_long_packet_(uint8_t cmd, uint8_t sub, uint8_t packet_type);
-  void build_long2b_packet_(uint8_t cmd, uint8_t sub1, uint8_t sub2, uint8_t packet_type);
-  bool send_packet_();
-  bool receive_packet_();
-  void apply_byte_stuffing_(const uint8_t *in, size_t in_len, std::vector<uint8_t> &out);
-  bool remove_byte_stuffing_(const uint8_t *in, size_t in_len, std::vector<uint8_t> &out);
+  sensor::Sensor        *ss_[SI_COUNT]{};
+  text_sensor::TextSensor *ts_[TI_COUNT]{};
+  binary_sensor::BinarySensor *bs_[BI_COUNT]{};
 
-  // Parsers
-  bool parse_datetime_();
-  bool parse_energy_();
-  bool parse_voltage_current_();
-  bool parse_power_();
-  bool parse_extended_info_();
+  uint8_t sbuf_[20]{}, rbuf_[64]{};
+  size_t  rlen_{0};
 
-  // Publish helpers
-  void publish_sensor_(sensor::Sensor *s, float val);
-  void publish_text_(text_sensor::TextSensor *s, const std::string &val);
-  void publish_binary_(binary_sensor::BinarySensor *s, bool val);
+  // ── CC1101 low-level ──────────────────────────────────────────────────────
+  void cc_cs_(bool v) { cs_->digital_write(v); delayMicroseconds(2); }
 
-  // Internal state
-  GPIOPin *cs_pin_{nullptr};
-  GPIOPin *gdo0_pin_{nullptr};
-  uint16_t meter_address_{1};
-  uint32_t poll_interval_min_{5};
+  void cc_strobe_(uint8_t cmd) {
+    cc_cs_(false); SPI.transfer(cmd); cc_cs_(true);
+  }
+  void cc_wreg_(uint8_t addr, uint8_t val) {
+    cc_cs_(false); SPI.transfer(addr & 0x3F); SPI.transfer(val); cc_cs_(true);
+  }
+  void cc_wburst_(uint8_t addr, const uint8_t *d, size_t n) {
+    cc_cs_(false); SPI.transfer((addr & 0x3F) | CC_BURST);
+    for (size_t i = 0; i < n; i++) SPI.transfer(d[i]);
+    cc_cs_(true);
+  }
+  uint8_t cc_rreg_(uint8_t addr) {
+    cc_cs_(false); SPI.transfer(CC_READ | (addr & 0x3F)); uint8_t v = SPI.transfer(0); cc_cs_(true);
+    return v;
+  }
+  uint8_t cc_rstat_(uint8_t addr) {
+    cc_cs_(false); SPI.transfer(CC_READ | CC_BURST | (addr & 0x3F)); uint8_t v = SPI.transfer(0); cc_cs_(true);
+    return v;
+  }
+  bool cc_init_() {
+    cc_cs_(true); delayMicroseconds(5);
+    cc_cs_(false); delayMicroseconds(10);
+    cc_cs_(true); delayMicroseconds(41);
+    cc_strobe_(CC_SRES); delay(10);
+    cc_wburst_(0x00, RF_CFG, sizeof(RF_CFG));
+    cc_strobe_(CC_SCAL); delay(2);
+    cc_strobe_(CC_SFRX); cc_strobe_(CC_SFTX); cc_strobe_(CC_SRX);
+    uint8_t ver = cc_rstat_(CC_VERSION);
+    ESP_LOGD(TAG, "CC1101 version=0x%02X", ver);
+    return (ver == 0x14 || ver == 0x04);
+  }
 
-  uint8_t send_buf_[20]{};
-  uint8_t recv_buf_[60]{};
-  uint8_t result_buf_[60]{};
-  size_t result_len_{0};
-  uint8_t packet_type_{0};
-  uint8_t my_crc_{0};
+  // ── Byte stuffing ─────────────────────────────────────────────────────────
+  void stuff_(const uint8_t *in, size_t n, std::vector<uint8_t> &out) {
+    out.push_back(in[0]); out.push_back(in[1]); out.push_back(in[2]);
+    for (size_t i = 3; i < n - 1; i++) {
+      if      (in[i] == 0x55) { out.push_back(0x73); out.push_back(0x11); }
+      else if (in[i] == 0x73) { out.push_back(0x73); out.push_back(0x22); }
+      else                      out.push_back(in[i]);
+    }
+    out.push_back(in[n - 1]);
+  }
+  bool destuff_(const uint8_t *in, size_t n, std::vector<uint8_t> &out) {
+    for (size_t i = 0; i < n; i++) {
+      if (in[i] == 0x73 && i + 1 < n) {
+        if      (in[i+1] == 0x11) { out.push_back(0x55); i++; }
+        else if (in[i+1] == 0x22) { out.push_back(0x73); i++; }
+        else                         out.push_back(in[i]);
+      } else { out.push_back(in[i]); }
+    }
+    return true;
+  }
 
-  uint32_t extended_poll_count_{0};
+  // ── Build request packet ──────────────────────────────────────────────────
+  // Returns raw length (including stop byte)
+  size_t build_pkt_(uint8_t cmd, int sub1, int sub2) {
+    uint8_t *b = sbuf_;
+    uint8_t data_len = (sub1 < 0) ? 0 : (sub2 < 0) ? 1 : 2;
+    b[0] = 0x0F + data_len;          // total len
+    b[1] = 0x73; b[2] = 0x55;        // start
+    b[3] = 0x20 + data_len;          // Params
+    b[4] = 0x00;
+    b[5] = addr_ & 0xFF; b[6] = (addr_ >> 8) & 0xFF;
+    b[7] = 0xFE; b[8] = 0xFF;
+    b[9] = cmd;
+    b[10] = b[11] = b[12] = b[13] = 0x00; // PIN
+    size_t pos = 14;
+    if (sub1 >= 0) b[pos++] = (uint8_t)sub1;
+    if (sub2 >= 0) b[pos++] = (uint8_t)sub2;
+    b[pos] = crc8(b + 3, pos - 3);   // CRC
+    b[pos + 1] = 0x55;               // stop
+    return pos + 2;
+  }
 
-  // Sensors
-  sensor::Sensor *energy_sum_{nullptr};
-  sensor::Sensor *energy_t1_{nullptr};
-  sensor::Sensor *energy_t2_{nullptr};
-  sensor::Sensor *energy_t3_{nullptr};
-  sensor::Sensor *voltage_a_{nullptr};
-  sensor::Sensor *voltage_b_{nullptr};
-  sensor::Sensor *voltage_c_{nullptr};
-  sensor::Sensor *current_a_{nullptr};
-  sensor::Sensor *current_b_{nullptr};
-  sensor::Sensor *current_c_{nullptr};
-  sensor::Sensor *power_active_{nullptr};
-  sensor::Sensor *power_reactive_{nullptr};
-  sensor::Sensor *frequency_{nullptr};
-  sensor::Sensor *power_factor_{nullptr};
-  sensor::Sensor *temperature_{nullptr};
-  sensor::Sensor *power_a_{nullptr};
-  sensor::Sensor *power_b_{nullptr};
-  sensor::Sensor *power_c_{nullptr};
-  sensor::Sensor *reactive_a_{nullptr};
-  sensor::Sensor *reactive_b_{nullptr};
-  sensor::Sensor *reactive_c_{nullptr};
-  sensor::Sensor *apparent_a_{nullptr};
-  sensor::Sensor *apparent_b_{nullptr};
-  sensor::Sensor *apparent_c_{nullptr};
-  sensor::Sensor *pf_a_{nullptr};
-  sensor::Sensor *pf_b_{nullptr};
-  sensor::Sensor *pf_c_{nullptr};
+  // ── Send & receive ────────────────────────────────────────────────────────
+  bool do_cmd_(uint8_t cmd, int sub1, int sub2, int expected_pkts) {
+    size_t raw_len = build_pkt_(cmd, sub1, sub2);
+    std::vector<uint8_t> stuffed;
+    stuff_(sbuf_, raw_len, stuffed);
+    stuffed[0] = (uint8_t)(stuffed.size() - 1); // update length byte
 
-  text_sensor::TextSensor *tariff_text_{nullptr};
-  text_sensor::TextSensor *relay_state_{nullptr};
-  text_sensor::TextSensor *seal_state_{nullptr};
-  text_sensor::TextSensor *hw_version_{nullptr};
-  text_sensor::TextSensor *sw_version_{nullptr};
-  text_sensor::TextSensor *meter_type_{nullptr};
-  text_sensor::TextSensor *meter_datetime_{nullptr};
-  text_sensor::TextSensor *last_status_{nullptr};
+    // Send
+    cc_strobe_(CC_SIDLE);
+    cc_strobe_(CC_SFTX);
+    cc_strobe_(CC_SFRX);
+    cc_cs_(false);
+    SPI.transfer(CC_TXFIFO | CC_BURST);
+    for (uint8_t b : stuffed) SPI.transfer(b);
+    cc_cs_(true);
+    cc_strobe_(CC_STX);
 
-  binary_sensor::BinarySensor *seal_cover_{nullptr};
-  binary_sensor::BinarySensor *seal_terminal_{nullptr};
-  binary_sensor::BinarySensor *seal_module_{nullptr};
-  binary_sensor::BinarySensor *magnet_dc_{nullptr};
-  binary_sensor::BinarySensor *magnet_ac_{nullptr};
-  binary_sensor::BinarySensor *relay_on_{nullptr};
-  binary_sensor::BinarySensor *current_imbalance_{nullptr};
-  binary_sensor::BinarySensor *time_synced_{nullptr};
+    // Wait TX done
+    uint32_t t0 = millis();
+    while (!gdo0_->digital_read() && millis() - t0 < 200) yield();
+    while ( gdo0_->digital_read() && millis() - t0 < 500) yield();
+
+    cc_strobe_(CC_SFRX);
+    cc_strobe_(CC_SRX);
+
+    // Receive
+    std::vector<uint8_t> raw_all;
+    int got = 0;
+    t0 = millis();
+    while (millis() - t0 < 1200 && got < expected_pkts) {
+      uint8_t rxb = cc_rstat_(CC_RXBYTES);
+      if (rxb > 0 && rxb < 64) {
+        got++;
+        cc_cs_(false);
+        SPI.transfer(CC_RXFIFO | CC_READ | CC_BURST);
+        uint8_t len_b = SPI.transfer(0);
+        if (len_b > 0 && len_b < 60) {
+          for (uint8_t i = 1; i < len_b; i++) raw_all.push_back(SPI.transfer(0));
+        }
+        cc_cs_(true);
+        cc_strobe_(CC_SIDLE); cc_strobe_(CC_SFRX); cc_strobe_(CC_SFTX); cc_strobe_(CC_SRX);
+      }
+      yield();
+    }
+
+    if (raw_all.empty()) {
+      ESP_LOGW(TAG, "cmd=0x%02X timeout", cmd);
+      return false;
+    }
+
+    std::vector<uint8_t> ds;
+    destuff_(raw_all.data(), raw_all.size(), ds);
+    if (ds.size() > sizeof(rbuf_)) { ESP_LOGW(TAG, "RX overflow"); return false; }
+    memcpy(rbuf_, ds.data(), ds.size());
+    rlen_ = ds.size();
+
+    // Validate header
+    if (rlen_ < 5 || rbuf_[0] != 0x73 || rbuf_[1] != 0x55) {
+      ESP_LOGW(TAG, "bad header"); return false;
+    }
+    // Address check
+    if (rbuf_[4] != (addr_ & 0xFF) || rbuf_[5] != ((addr_ >> 8) & 0xFF)) {
+      ESP_LOGW(TAG, "addr mismatch"); return false;
+    }
+    return true;
+  }
+
+  // ── Relay command ─────────────────────────────────────────────────────────
+  void send_relay_(uint8_t op) {
+    do_cmd_(0x3A, op, -1, 2);
+    ESP_LOGI(TAG, "Relay cmd 0x%02X sent", op);
+  }
+
+  // ── Parse helpers ─────────────────────────────────────────────────────────
+  float u16le_(size_t i)  { return (float)((uint16_t)rbuf_[i] | ((uint16_t)rbuf_[i+1] << 8)); }
+  float u32le_(size_t i)  { return (float)(((uint32_t)rbuf_[i]) | ((uint32_t)rbuf_[i+1]<<8) | ((uint32_t)rbuf_[i+2]<<16) | ((uint32_t)rbuf_[i+3]<<24)); }
+  float u24le_(size_t i)  { return (float)(((uint32_t)rbuf_[i]) | ((uint32_t)rbuf_[i+1]<<8) | ((uint32_t)rbuf_[i+2]<<16)); }
+
+  // Signed: MSB is sign bit (not 2's complement — Mirtek-specific)
+  float s16le_mirtek_(size_t i, float div) {
+    bool neg = (rbuf_[i+1] >= 128);
+    float v = (float)((uint16_t)rbuf_[i] | ((uint16_t)(rbuf_[i+1] & 0x7F) << 8)) / div;
+    return neg ? -v : v;
+  }
+  float s24le_mirtek_(size_t i, float div) {
+    bool neg = (rbuf_[i+2] >= 128);
+    float v = (float)(((uint32_t)rbuf_[i]) | ((uint32_t)rbuf_[i+1]<<8) | ((uint32_t)(rbuf_[i+2]&0x7F)<<16)) / div;
+    return neg ? -v : v;
+  }
+
+  void pub_s_(int i, float v) { if (ss_[i]) ss_[i]->publish_state(v); }
+  void pub_txt_(int i, const std::string &v) { if (ts_[i]) ts_[i]->publish_state(v); }
+  void pub_bin_(int i, bool v) { if (bs_[i]) bs_[i]->publish_state(v); }
+
+  // ── parse_datetime_ (cmd 0x1C) ────────────────────────────────────────────
+  bool parse_datetime_() {
+    if (rlen_ < 20) return false;
+    const uint8_t *r = rbuf_;
+    if (r[6] != 0x1C) return false;
+
+    // Byte[7] = тип счётчика
+    uint8_t tp = r[7];
+    three_phase_ = !((tp == 0x98) || (tp == 0x99));
+    char type_buf[32];
+    switch (tp) {
+      case 0xA8: case 0xA9: snprintf(type_buf,32,"3ф трансф.акт-реакт"); break;
+      case 0x88: case 0x89: snprintf(type_buf,32,"3ф трансф.акт двунапр"); break;
+      case 0x80: case 0x81: snprintf(type_buf,32,"3ф акт двунапр"); break;
+      case 0x68: case 0x69: snprintf(type_buf,32,"3ф трансф.акт"); break;
+      case 0x98: case 0x99: snprintf(type_buf,32,"1ф 2эл.акт-реакт"); break;
+      default:               snprintf(type_buf,32,"Тип 0x%02X", tp);
+    }
+    pub_txt_(TI_TYPE, type_buf);
+    pub_bin_(BI_3PHASE, three_phase_);
+
+    // Дата/время (позиции могут варьироваться по прошивке)
+    // Формат: сс мм чч ДД ММ ГГ ДН (с байта 11)
+    if (rlen_ >= 18) {
+      char date_buf[12], time_buf[10];
+      snprintf(time_buf, 10, "%02d:%02d:%02d", r[13], r[12], r[11]);
+      snprintf(date_buf, 12, "%02d.%02d.%02d", r[14], r[15], r[16]);
+      pub_txt_(TI_TIME, time_buf);
+      pub_txt_(TI_DATE, date_buf);
+    }
+    return true;
+  }
+
+  // ── parse_energy_ (cmd 0x05 sub=0x04) ────────────────────────────────────
+  bool parse_energy_() {
+    if (rlen_ < 35) return false;
+    const uint8_t *r = rbuf_;
+    if (r[6] != 0x05) return false;
+
+    // Положение запятой из конф.байта r[12]
+    uint8_t cfg = r[12];
+    uint8_t dp  = cfg & 0x03;
+    float   div = (dp==0)?1.f:(dp==1)?10.f:(dp==2)?100.f:1000.f;
+
+    // Тариф
+    uint8_t cur_t = (cfg >> 2) & 0x03;
+    const char *tnames[] = {"День (Т1)","Ночь (Т2)","Полупик (Т3)","Специальный"};
+    pub_txt_(TI_TARIFF, tnames[cur_t]);
+
+    // Энергия (смещения по протоколу Star v1.20)
+    // Суммарная активная: байты 17-20 (u32 / 100)
+    if (rlen_ >= 21) pub_s_(SI_SUM,   u32le_(17) / 100.0f);
+    // T1: байты 25-28
+    if (rlen_ >= 29) pub_s_(SI_T1,    u32le_(25) / 100.0f);
+    // T2: байты 29-32
+    if (rlen_ >= 33) pub_s_(SI_T2,    u32le_(29) / 100.0f);
+    // T3: байты 33-36
+    if (rlen_ >= 37) pub_s_(SI_T3,    u32le_(33) / 100.0f);
+
+    // Реактивная энергия — если длина достаточная (расширенный ответ)
+    if (rlen_ >= 53) {
+      pub_s_(SI_SUM_R, u32le_(37) / 100.0f);
+      pub_s_(SI_T1_R,  u32le_(41) / 100.0f);
+      pub_s_(SI_T2_R,  u32le_(45) / 100.0f);
+      pub_s_(SI_T3_R,  u32le_(49) / 100.0f);
+    }
+
+    ESP_LOGI(TAG, "kWh SUM=%.2f T1=%.2f T2=%.2f T3=%.2f",
+      ss_[SI_SUM]  ? ss_[SI_SUM]->state  : 0.f,
+      ss_[SI_T1]   ? ss_[SI_T1]->state   : 0.f,
+      ss_[SI_T2]   ? ss_[SI_T2]->state   : 0.f,
+      ss_[SI_T3]   ? ss_[SI_T3]->state   : 0.f);
+    return true;
+  }
+
+  // ── parse_instant_ (cmd 0x2B sub=0x00) ───────────────────────────────────
+  bool parse_instant_() {
+    if (rlen_ < 36) return false;
+    const uint8_t *r = rbuf_;
+    if (r[6] != 0x2B) return false;
+
+    size_t base = 16; // данные начинаются с байта 16
+
+    if (three_phase_) {
+      // Активная мощность суммарная (u24 / 1000 = kW)
+      pub_s_(SI_KW,   u24le_(base) / 1000.0f);       base += 3;
+      // Реактивная мощность (s24 / 1000)
+      pub_s_(SI_KVAR, s24le_mirtek_(base, 1000.0f));  base += 3;
+      // Частота (u16 / 100)
+      pub_s_(SI_FREQ, u16le_(base) / 100.0f);         base += 2;
+      // cos φ (s16 / 1000)
+      pub_s_(SI_COS,  s16le_mirtek_(base, 1000.0f));  base += 2;
+      // Напряжения (u16 / 100)
+      pub_s_(SI_V1, u16le_(base)/100.f); base+=2;
+      pub_s_(SI_V2, u16le_(base)/100.f); base+=2;
+      pub_s_(SI_V3, u16le_(base)/100.f); base+=2;
+      // Токи (u24 / 1000)
+      pub_s_(SI_I1, u24le_(base)/1000.f); base+=3;
+      pub_s_(SI_I2, u24le_(base)/1000.f); base+=3;
+      pub_s_(SI_I3, u24le_(base)/1000.f); base+=3;
+    } else {
+      // 1-фазный
+      pub_s_(SI_KW,   u16le_(base)/1000.f); base+=2;
+      pub_s_(SI_KVAR, s16le_mirtek_(base,1000.f)); base+=2;
+      pub_s_(SI_FREQ, u16le_(base)/100.f);  base+=2;
+      pub_s_(SI_COS,  s16le_mirtek_(base,1000.f)); base+=2;
+      pub_s_(SI_V1, u16le_(base)/100.f); base+=2;
+      pub_s_(SI_I1, u24le_(base)/1000.f); base+=3;
+    }
+
+    ESP_LOGI(TAG, "U=%.1f/%.1f/%.1f I=%.3f/%.3f/%.3f P=%.3fkW Q=%.3f f=%.2f cos=%.3f",
+      ss_[SI_V1]?ss_[SI_V1]->state:0.f, ss_[SI_V2]?ss_[SI_V2]->state:0.f, ss_[SI_V3]?ss_[SI_V3]->state:0.f,
+      ss_[SI_I1]?ss_[SI_I1]->state:0.f, ss_[SI_I2]?ss_[SI_I2]->state:0.f, ss_[SI_I3]?ss_[SI_I3]->state:0.f,
+      ss_[SI_KW]?ss_[SI_KW]->state:0.f, ss_[SI_KVAR]?ss_[SI_KVAR]->state:0.f,
+      ss_[SI_FREQ]?ss_[SI_FREQ]->state:0.f, ss_[SI_COS]?ss_[SI_COS]->state:0.f);
+    return true;
+  }
+
+  // ── parse_phase_ (cmd 0x2B sub=0x10) ─────────────────────────────────────
+  bool parse_phase_() {
+    if (rlen_ < 40) return false;
+    const uint8_t *r = rbuf_;
+    if (r[6] != 0x2B) return false;
+
+    size_t b = 16;
+    // cos φ по фазам (s16 / 1000)
+    pub_s_(SI_CA, s16le_mirtek_(b,1000.f)); b+=2;
+    pub_s_(SI_CB, s16le_mirtek_(b,1000.f)); b+=2;
+    pub_s_(SI_CC, s16le_mirtek_(b,1000.f)); b+=2;
+    // Активная мощность по фазам (u16 / 1000 = kW → convert to W)
+    pub_s_(SI_PA, u16le_(b));  b+=2;  // в ваттах
+    pub_s_(SI_PB, u16le_(b));  b+=2;
+    pub_s_(SI_PC, u16le_(b));  b+=2;
+    // Реактивная (s16 / 1000 kVar → var *1000 для согласования)
+    pub_s_(SI_QA, s16le_mirtek_(b,1.f)); b+=2;
+    pub_s_(SI_QB, s16le_mirtek_(b,1.f)); b+=2;
+    pub_s_(SI_QC, s16le_mirtek_(b,1.f)); b+=2;
+    // Полная (u16 VA)
+    pub_s_(SI_SA, u16le_(b)); b+=2;
+    pub_s_(SI_SB, u16le_(b)); b+=2;
+    pub_s_(SI_SC, u16le_(b)); b+=2;
+    // Температура (байт со знаком: >= 128 → отрицательная)
+    if (b < rlen_) {
+      float t = (rbuf_[b] >= 128) ? (float)(rbuf_[b] - 128) * -1.f : (float)rbuf_[b];
+      pub_s_(SI_TEMP, t);
+    }
+    return true;
+  }
+
+  // ── parse_ident_ (cmd 0x01) ───────────────────────────────────────────────
+  bool parse_ident_() {
+    if (rlen_ < 20) return false;
+    const uint8_t *r = rbuf_;
+    if (r[6] != 0x01) return false;
+
+    // Версия ПО: r[12].r[11]
+    char fw[12];
+    snprintf(fw, 12, "%02d.%02d", r[13], r[12]);
+    pub_txt_(TI_FW, fw);
+
+    // Реле (r[8], r[9])
+    bool relay_on = false;
+    // byte 9 bit 3=relay2, bit 2=relay1; version-dependent logic
+    uint8_t sw_ver = r[13];
+    bool par_r2 = (r[9] >> 3) & 1;
+    bool par_r1 = (r[9] >> 2) & 1;
+    relay_on = (sw_ver <= 4 && !par_r1) ? par_r2 : !par_r2;
+    pub_txt_(TI_RELAY, relay_on ? "Вкл" : "Выкл");
+    pub_bin_(BI_RELAY, relay_on);
+
+    // Пломбы (r[8])
+    bool p1 = (r[8] >> 1) & 1; // клеммная крышка
+    bool p2 = (r[8] >> 2) & 1; // корпус
+    bool p3 = (r[8] >> 3) & 1; // модуль связи
+    bool m1 = (r[8] >> 4) & 1; // пост.магнит
+    bool m2 = (r[8] >> 5) & 1; // перем.магнит
+    bool seals_ok = !(p1||p2||p3||m1||m2);
+    std::string seal_str;
+    if (seals_ok) {
+      seal_str = "OK";
+    } else {
+      if (p3) seal_str += "Модуль;";
+      if (p2) seal_str += "Корпус;";
+      if (p1) seal_str += "Клеммы;";
+      if (m1) seal_str += "Пост.магнит;";
+      if (m2) seal_str += "Перем.магнит;";
+    }
+    pub_txt_(TI_SEAL, seal_str);
+    pub_bin_(BI_SEAL_OK, seals_ok);
+
+    ESP_LOGI(TAG, "FW=%s Relay=%s Seal=%s", fw, relay_on?"Вкл":"Выкл", seal_str.c_str());
+    return true;
+  }
+
+  // ── parse_battery_ (cmd 0x1E) ─────────────────────────────────────────────
+  bool parse_battery_() {
+    if (rlen_ < 14) return false;
+    const uint8_t *r = rbuf_;
+    if (r[6] != 0x1E) return false;
+    // Ресурс батарейки: r[10] = оставшийся % (0-100)
+    pub_s_(SI_BAT, (float)r[10]);
+    return true;
+  }
 };
 
 }  // namespace mirtek_cc1101
