@@ -1,83 +1,86 @@
-"""
-Mirtek CC1101 ESPHome Component
-Счётчики Миртек Star 104/304 через радиомодуль CC1101 (433 МГц)
-https://github.com/Alecseyyy/ESPHome-Mirt-830
-"""
+"""Mirtek CC1101 — ESPHome 2026.4.x external component."""
 import esphome.codegen as cg
 import esphome.config_validation as cv
+from esphome import pins
 from esphome.components import sensor, text_sensor, binary_sensor
 from esphome.const import (
     CONF_ID,
     DEVICE_CLASS_ENERGY,
-    DEVICE_CLASS_POWER,
     DEVICE_CLASS_VOLTAGE,
     DEVICE_CLASS_CURRENT,
+    DEVICE_CLASS_POWER,
     DEVICE_CLASS_FREQUENCY,
+    DEVICE_CLASS_POWER_FACTOR,
     DEVICE_CLASS_TEMPERATURE,
     DEVICE_CLASS_BATTERY,
     DEVICE_CLASS_CONNECTIVITY,
+    DEVICE_CLASS_SAFETY,
+    DEVICE_CLASS_TAMPER,
+    DEVICE_CLASS_PROBLEM,
     STATE_CLASS_MEASUREMENT,
     STATE_CLASS_TOTAL_INCREASING,
     UNIT_KILOWATT_HOURS,
-    UNIT_KILOWATT,
     UNIT_VOLT,
     UNIT_AMPERE,
+    UNIT_WATT,
     UNIT_HERTZ,
     UNIT_CELSIUS,
+    UNIT_EMPTY,
     UNIT_PERCENT,
+    UNIT_KILOVOLT_AMPS_REACTIVE,
+    UNIT_KILOVOLT_AMPS_REACTIVE_HOURS,
+    UNIT_VOLT_AMPS,
+    ICON_FLASH,
+    ICON_THERMOMETER,
 )
 
-CODEOWNERS = ["@Alecseyyy"]
-AUTO_LOAD = ["sensor", "text_sensor", "binary_sensor"]
+CODEOWNERS = []
 
-mirtek_ns = cg.esphome_ns.namespace("mirtek_cc1101")
-MirtekCC1101Component = mirtek_ns.class_("MirtekCC1101", cg.Component)
+# ── config keys ───────────────────────────────────────────────────────────────
+CONF_CS_PIN       = "cs_pin"
+CONF_GDO0_PIN     = "gdo0_pin"
+CONF_METER_ADDR   = "meter_address"
 
-CONF_METER_ADDRESS = "meter_address"
-CONF_CS_PIN        = "cs_pin"
-CONF_GDO0_PIN      = "gdo0_pin"
+# sensors
+CONF_S_SUM    = "energy_sum"
+CONF_S_T1     = "energy_t1"
+CONF_S_T2     = "energy_t2"
+CONF_S_T3     = "energy_t3"
+CONF_S_SUM_R  = "reactive_sum"
+CONF_S_T1_R   = "reactive_t1"
+CONF_S_T2_R   = "reactive_t2"
+CONF_S_T3_R   = "reactive_t3"
+CONF_S_KW     = "power_active"
+CONF_S_KVAR   = "power_reactive"
+CONF_S_FREQ   = "frequency"
+CONF_S_COS    = "power_factor"
+CONF_S_V1     = "voltage_1"
+CONF_S_V2     = "voltage_2"
+CONF_S_V3     = "voltage_3"
+CONF_S_I1     = "current_1"
+CONF_S_I2     = "current_2"
+CONF_S_I3     = "current_3"
+CONF_S_PA     = "power_a"
+CONF_S_PB     = "power_b"
+CONF_S_PC     = "power_c"
+CONF_S_QA     = "reactive_a"
+CONF_S_QB     = "reactive_b"
+CONF_S_QC     = "reactive_c"
+CONF_S_SA     = "apparent_a"
+CONF_S_SB     = "apparent_b"
+CONF_S_SC     = "apparent_c"
+CONF_S_CA     = "pf_a"
+CONF_S_CB     = "pf_b"
+CONF_S_CC     = "pf_c"
+CONF_S_TEMP   = "temperature"
+CONF_S_BAT    = "battery"
 
-# ── Ключи конфигурации (совпадают с именами в mirtek.yaml) ────────────────
-# Сенсоры ss[0..31] — порядок должен совпадать с enum SI{} в mirtek_cc1101.h
-CONF_SUM    = "energy_sum"
-CONF_T1     = "energy_t1"
-CONF_T2     = "energy_t2"
-CONF_T3     = "energy_t3"
-CONF_SUM_R  = "reactive_sum"
-CONF_T1_R   = "reactive_t1"
-CONF_T2_R   = "reactive_t2"
-CONF_T3_R   = "reactive_t3"
-CONF_KW     = "power_active"
-CONF_KVAR   = "power_reactive"
-CONF_FREQ   = "frequency"
-CONF_COS    = "cos_phi"
-CONF_V1     = "voltage_1"
-CONF_V2     = "voltage_2"
-CONF_V3     = "voltage_3"
-CONF_I1     = "current_1"
-CONF_I2     = "current_2"
-CONF_I3     = "current_3"
-CONF_PA     = "power_a"
-CONF_PB     = "power_b"
-CONF_PC     = "power_c"
-CONF_QA     = "reactive_a"
-CONF_QB     = "reactive_b"
-CONF_QC     = "reactive_c"
-CONF_SA     = "apparent_a"
-CONF_SB     = "apparent_b"
-CONF_SC     = "apparent_c"
-CONF_CA     = "cos_a"
-CONF_CB     = "cos_b"
-CONF_CC_SEN = "cos_c"
-CONF_TEMP   = "temperature"
-CONF_BAT    = "battery"
-
-# Текст ts[0..11]
+# text sensors
 CONF_T_TARIFF = "tariff"
 CONF_T_RELAY  = "relay_state"
 CONF_T_SEAL   = "seal_state"
 CONF_T_TYPE   = "meter_type"
-CONF_T_FW     = "firmware"
+CONF_T_FW     = "fw_version"
 CONF_T_DATE   = "meter_date"
 CONF_T_TIME   = "meter_time"
 CONF_T_WORK   = "uptime_meter"
@@ -86,203 +89,143 @@ CONF_T_SERIAL = "serial_number"
 CONF_T_ABON   = "subscriber"
 CONF_T_STATUS = "status"
 
-# Бинарные bs[0..3]
-CONF_B_3PHASE = "three_phase"
-CONF_B_RELAY  = "relay_on"
-CONF_B_SEAL   = "seal_ok"
-CONF_B_CC     = "cc1101_ok"
+# binary sensors
+CONF_B_3PHASE  = "three_phase"
+CONF_B_RELAY   = "relay_on"
+CONF_B_SEAL_OK = "seal_ok"
+CONF_B_CC1101  = "cc1101_ok"
 
-# ── Порядок ss[], ts[], bs[] ──────────────────────────────────────────────
-_SS_KEYS = [
-    CONF_SUM, CONF_T1, CONF_T2, CONF_T3,
-    CONF_SUM_R, CONF_T1_R, CONF_T2_R, CONF_T3_R,
-    CONF_KW, CONF_KVAR, CONF_FREQ, CONF_COS,
-    CONF_V1, CONF_V2, CONF_V3,
-    CONF_I1, CONF_I2, CONF_I3,
-    CONF_PA, CONF_PB, CONF_PC,
-    CONF_QA, CONF_QB, CONF_QC,
-    CONF_SA, CONF_SB, CONF_SC,
-    CONF_CA, CONF_CB, CONF_CC_SEN,
-    CONF_TEMP, CONF_BAT,
-]
-_TS_KEYS = [
-    CONF_T_TARIFF, CONF_T_RELAY, CONF_T_SEAL, CONF_T_TYPE,
-    CONF_T_FW, CONF_T_DATE, CONF_T_TIME, CONF_T_WORK,
-    CONF_T_SYNC, CONF_T_SERIAL, CONF_T_ABON, CONF_T_STATUS,
-]
-_BS_KEYS = [CONF_B_3PHASE, CONF_B_RELAY, CONF_B_SEAL, CONF_B_CC]
+# ── C++ class ─────────────────────────────────────────────────────────────────
+mirtek_ns  = cg.esphome_ns.namespace("mirtek_cc1101")
+MirtekCC1101 = mirtek_ns.class_("MirtekCC1101", cg.PollingComponent)
 
-# ── Принудительные ASCII object_id для каждого сенсора ───────────────────
-# Решает проблему: кириллические имена одной длины дают одинаковый slug.
-# object_id = уникальный ASCII-идентификатор, не зависит от name.
-_SS_OBJECT_IDS = {
-    CONF_SUM:    "mirtek_energy_sum",
-    CONF_T1:     "mirtek_energy_t1",
-    CONF_T2:     "mirtek_energy_t2",
-    CONF_T3:     "mirtek_energy_t3",
-    CONF_SUM_R:  "mirtek_reactive_sum",
-    CONF_T1_R:   "mirtek_reactive_t1",
-    CONF_T2_R:   "mirtek_reactive_t2",
-    CONF_T3_R:   "mirtek_reactive_t3",
-    CONF_KW:     "mirtek_power_active",
-    CONF_KVAR:   "mirtek_power_reactive",
-    CONF_FREQ:   "mirtek_frequency",
-    CONF_COS:    "mirtek_cos_phi",
-    CONF_V1:     "mirtek_voltage_1",
-    CONF_V2:     "mirtek_voltage_2",
-    CONF_V3:     "mirtek_voltage_3",
-    CONF_I1:     "mirtek_current_1",
-    CONF_I2:     "mirtek_current_2",
-    CONF_I3:     "mirtek_current_3",
-    CONF_PA:     "mirtek_power_a",
-    CONF_PB:     "mirtek_power_b",
-    CONF_PC:     "mirtek_power_c",
-    CONF_QA:     "mirtek_reactive_a",
-    CONF_QB:     "mirtek_reactive_b",
-    CONF_QC:     "mirtek_reactive_c",
-    CONF_SA:     "mirtek_apparent_a",
-    CONF_SB:     "mirtek_apparent_b",
-    CONF_SC:     "mirtek_apparent_c",
-    CONF_CA:     "mirtek_cos_a",
-    CONF_CB:     "mirtek_cos_b",
-    CONF_CC_SEN: "mirtek_cos_c",
-    CONF_TEMP:   "mirtek_temperature",
-    CONF_BAT:    "mirtek_battery",
-}
-_TS_OBJECT_IDS = {
-    CONF_T_TARIFF: "mirtek_tariff",
-    CONF_T_RELAY:  "mirtek_relay_state",
-    CONF_T_SEAL:   "mirtek_seal_state",
-    CONF_T_TYPE:   "mirtek_meter_type",
-    CONF_T_FW:     "mirtek_firmware",
-    CONF_T_DATE:   "mirtek_meter_date",
-    CONF_T_TIME:   "mirtek_meter_time",
-    CONF_T_WORK:   "mirtek_uptime",
-    CONF_T_SYNC:   "mirtek_last_sync",
-    CONF_T_SERIAL: "mirtek_serial",
-    CONF_T_ABON:   "mirtek_subscriber",
-    CONF_T_STATUS: "mirtek_status",
-}
-_BS_OBJECT_IDS = {
-    CONF_B_3PHASE: "mirtek_three_phase",
-    CONF_B_RELAY:  "mirtek_relay_on",
-    CONF_B_SEAL:   "mirtek_seal_ok",
-    CONF_B_CC:     "mirtek_cc1101_ok",
-}
+# ── helpers ───────────────────────────────────────────────────────────────────
+def _sens(unit, decimals, dc=None, sc=STATE_CLASS_MEASUREMENT, icon=None):
+    kwargs = dict(unit_of_measurement=unit, accuracy_decimals=decimals, state_class=sc)
+    if dc:   kwargs["device_class"] = dc
+    if icon: kwargs["icon"] = icon
+    return sensor.sensor_schema(**kwargs)
 
+def _energy(unit=UNIT_KILOWATT_HOURS, icon=ICON_FLASH):
+    return sensor.sensor_schema(
+        unit_of_measurement=unit,
+        accuracy_decimals=2,
+        device_class=DEVICE_CLASS_ENERGY,
+        state_class=STATE_CLASS_TOTAL_INCREASING,
+        icon=icon,
+    )
 
-def _inject_object_id(schema, key, oid_map):
-    """Добавить object_id по умолчанию в схему сенсора чтобы избежать slug-конфликтов."""
-    return schema.extend({
-        cv.Optional("object_id", default=oid_map[key]): cv.string,
-    })
-
-
-# ── Схема конфигурации ────────────────────────────────────────────────────
-def _ss(key, **kwargs):
-    return _inject_object_id(sensor.sensor_schema(**kwargs), key, _SS_OBJECT_IDS)
-
-def _ts(key):
-    return _inject_object_id(text_sensor.text_sensor_schema(), key, _TS_OBJECT_IDS)
-
-def _bs(key, **kwargs):
-    return _inject_object_id(binary_sensor.binary_sensor_schema(**kwargs), key, _BS_OBJECT_IDS)
-
-
+# ── CONFIG_SCHEMA ─────────────────────────────────────────────────────────────
 CONFIG_SCHEMA = cv.Schema({
-    cv.GenerateID(): cv.declare_id(MirtekCC1101Component),
-    cv.Required(CONF_METER_ADDRESS): cv.int_range(min=1, max=65000),
-    cv.Required(CONF_CS_PIN):        cv.int_range(min=0, max=39),
-    cv.Required(CONF_GDO0_PIN):      cv.int_range(min=0, max=39),
+    cv.GenerateID():                cv.declare_id(MirtekCC1101),
+    cv.Required(CONF_CS_PIN):       pins.gpio_output_pin_schema,
+    cv.Required(CONF_GDO0_PIN):     pins.gpio_input_pin_schema,
+    cv.Required(CONF_METER_ADDR):   cv.int_range(min=1, max=65000),
 
-    # Активная энергия
-    cv.Optional(CONF_SUM): _ss(CONF_SUM, unit_of_measurement=UNIT_KILOWATT_HOURS, device_class=DEVICE_CLASS_ENERGY,    state_class=STATE_CLASS_TOTAL_INCREASING, accuracy_decimals=2),
-    cv.Optional(CONF_T1):  _ss(CONF_T1,  unit_of_measurement=UNIT_KILOWATT_HOURS, device_class=DEVICE_CLASS_ENERGY,    state_class=STATE_CLASS_TOTAL_INCREASING, accuracy_decimals=2),
-    cv.Optional(CONF_T2):  _ss(CONF_T2,  unit_of_measurement=UNIT_KILOWATT_HOURS, device_class=DEVICE_CLASS_ENERGY,    state_class=STATE_CLASS_TOTAL_INCREASING, accuracy_decimals=2),
-    cv.Optional(CONF_T3):  _ss(CONF_T3,  unit_of_measurement=UNIT_KILOWATT_HOURS, device_class=DEVICE_CLASS_ENERGY,    state_class=STATE_CLASS_TOTAL_INCREASING, accuracy_decimals=2),
-    # Реактивная энергия
-    cv.Optional(CONF_SUM_R): _ss(CONF_SUM_R, unit_of_measurement="kvarh", state_class=STATE_CLASS_TOTAL_INCREASING, accuracy_decimals=2),
-    cv.Optional(CONF_T1_R):  _ss(CONF_T1_R,  unit_of_measurement="kvarh", state_class=STATE_CLASS_TOTAL_INCREASING, accuracy_decimals=2),
-    cv.Optional(CONF_T2_R):  _ss(CONF_T2_R,  unit_of_measurement="kvarh", state_class=STATE_CLASS_TOTAL_INCREASING, accuracy_decimals=2),
-    cv.Optional(CONF_T3_R):  _ss(CONF_T3_R,  unit_of_measurement="kvarh", state_class=STATE_CLASS_TOTAL_INCREASING, accuracy_decimals=2),
-    # Мощность суммарная
-    cv.Optional(CONF_KW):   _ss(CONF_KW,   unit_of_measurement=UNIT_KILOWATT, device_class=DEVICE_CLASS_POWER,     state_class=STATE_CLASS_MEASUREMENT, accuracy_decimals=3),
-    cv.Optional(CONF_KVAR): _ss(CONF_KVAR, unit_of_measurement="kvar",        state_class=STATE_CLASS_MEASUREMENT, accuracy_decimals=3),
-    cv.Optional(CONF_FREQ): _ss(CONF_FREQ, unit_of_measurement=UNIT_HERTZ,   device_class=DEVICE_CLASS_FREQUENCY,  state_class=STATE_CLASS_MEASUREMENT, accuracy_decimals=2),
-    cv.Optional(CONF_COS):  _ss(CONF_COS,  unit_of_measurement="",            state_class=STATE_CLASS_MEASUREMENT, accuracy_decimals=3),
-    # Напряжения
-    cv.Optional(CONF_V1): _ss(CONF_V1, unit_of_measurement=UNIT_VOLT, device_class=DEVICE_CLASS_VOLTAGE, state_class=STATE_CLASS_MEASUREMENT, accuracy_decimals=1),
-    cv.Optional(CONF_V2): _ss(CONF_V2, unit_of_measurement=UNIT_VOLT, device_class=DEVICE_CLASS_VOLTAGE, state_class=STATE_CLASS_MEASUREMENT, accuracy_decimals=1),
-    cv.Optional(CONF_V3): _ss(CONF_V3, unit_of_measurement=UNIT_VOLT, device_class=DEVICE_CLASS_VOLTAGE, state_class=STATE_CLASS_MEASUREMENT, accuracy_decimals=1),
-    # Токи
-    cv.Optional(CONF_I1): _ss(CONF_I1, unit_of_measurement=UNIT_AMPERE, device_class=DEVICE_CLASS_CURRENT, state_class=STATE_CLASS_MEASUREMENT, accuracy_decimals=3),
-    cv.Optional(CONF_I2): _ss(CONF_I2, unit_of_measurement=UNIT_AMPERE, device_class=DEVICE_CLASS_CURRENT, state_class=STATE_CLASS_MEASUREMENT, accuracy_decimals=3),
-    cv.Optional(CONF_I3): _ss(CONF_I3, unit_of_measurement=UNIT_AMPERE, device_class=DEVICE_CLASS_CURRENT, state_class=STATE_CLASS_MEASUREMENT, accuracy_decimals=3),
-    # Активная мощность по фазам
-    cv.Optional(CONF_PA): _ss(CONF_PA, unit_of_measurement="W", device_class=DEVICE_CLASS_POWER, state_class=STATE_CLASS_MEASUREMENT, accuracy_decimals=0),
-    cv.Optional(CONF_PB): _ss(CONF_PB, unit_of_measurement="W", device_class=DEVICE_CLASS_POWER, state_class=STATE_CLASS_MEASUREMENT, accuracy_decimals=0),
-    cv.Optional(CONF_PC): _ss(CONF_PC, unit_of_measurement="W", device_class=DEVICE_CLASS_POWER, state_class=STATE_CLASS_MEASUREMENT, accuracy_decimals=0),
-    # Реактивная мощность по фазам
-    cv.Optional(CONF_QA): _ss(CONF_QA, unit_of_measurement="var", state_class=STATE_CLASS_MEASUREMENT, accuracy_decimals=0),
-    cv.Optional(CONF_QB): _ss(CONF_QB, unit_of_measurement="var", state_class=STATE_CLASS_MEASUREMENT, accuracy_decimals=0),
-    cv.Optional(CONF_QC): _ss(CONF_QC, unit_of_measurement="var", state_class=STATE_CLASS_MEASUREMENT, accuracy_decimals=0),
-    # Полная мощность по фазам
-    cv.Optional(CONF_SA): _ss(CONF_SA, unit_of_measurement="VA", state_class=STATE_CLASS_MEASUREMENT, accuracy_decimals=0),
-    cv.Optional(CONF_SB): _ss(CONF_SB, unit_of_measurement="VA", state_class=STATE_CLASS_MEASUREMENT, accuracy_decimals=0),
-    cv.Optional(CONF_SC): _ss(CONF_SC, unit_of_measurement="VA", state_class=STATE_CLASS_MEASUREMENT, accuracy_decimals=0),
-    # Косинусы по фазам
-    cv.Optional(CONF_CA):     _ss(CONF_CA,     unit_of_measurement="", state_class=STATE_CLASS_MEASUREMENT, accuracy_decimals=3),
-    cv.Optional(CONF_CB):     _ss(CONF_CB,     unit_of_measurement="", state_class=STATE_CLASS_MEASUREMENT, accuracy_decimals=3),
-    cv.Optional(CONF_CC_SEN): _ss(CONF_CC_SEN, unit_of_measurement="", state_class=STATE_CLASS_MEASUREMENT, accuracy_decimals=3),
-    # Прочие
-    cv.Optional(CONF_TEMP): _ss(CONF_TEMP, unit_of_measurement=UNIT_CELSIUS, device_class=DEVICE_CLASS_TEMPERATURE, state_class=STATE_CLASS_MEASUREMENT, accuracy_decimals=0),
-    cv.Optional(CONF_BAT):  _ss(CONF_BAT,  unit_of_measurement=UNIT_PERCENT,  device_class=DEVICE_CLASS_BATTERY,    state_class=STATE_CLASS_MEASUREMENT, accuracy_decimals=0),
+    # active energy
+    cv.Optional(CONF_S_SUM):   _energy(),
+    cv.Optional(CONF_S_T1):    _energy(icon="mdi:weather-sunny"),
+    cv.Optional(CONF_S_T2):    _energy(icon="mdi:weather-night"),
+    cv.Optional(CONF_S_T3):    _energy(icon="mdi:weather-sunset"),
+    # reactive energy
+    cv.Optional(CONF_S_SUM_R): _energy(unit=UNIT_KILOVOLT_AMPS_REACTIVE_HOURS),
+    cv.Optional(CONF_S_T1_R):  _energy(unit=UNIT_KILOVOLT_AMPS_REACTIVE_HOURS),
+    cv.Optional(CONF_S_T2_R):  _energy(unit=UNIT_KILOVOLT_AMPS_REACTIVE_HOURS),
+    cv.Optional(CONF_S_T3_R):  _energy(unit=UNIT_KILOVOLT_AMPS_REACTIVE_HOURS),
+    # instantaneous
+    cv.Optional(CONF_S_KW):   _sens(UNIT_WATT,    0, DEVICE_CLASS_POWER,       icon=ICON_FLASH),
+    cv.Optional(CONF_S_KVAR): _sens(UNIT_KILOVOLT_AMPS_REACTIVE, 3),
+    cv.Optional(CONF_S_FREQ): _sens(UNIT_HERTZ,   2, DEVICE_CLASS_FREQUENCY),
+    cv.Optional(CONF_S_COS):  _sens(UNIT_EMPTY,   3, DEVICE_CLASS_POWER_FACTOR),
+    # voltage
+    cv.Optional(CONF_S_V1):   _sens(UNIT_VOLT,  1, DEVICE_CLASS_VOLTAGE),
+    cv.Optional(CONF_S_V2):   _sens(UNIT_VOLT,  1, DEVICE_CLASS_VOLTAGE),
+    cv.Optional(CONF_S_V3):   _sens(UNIT_VOLT,  1, DEVICE_CLASS_VOLTAGE),
+    # current
+    cv.Optional(CONF_S_I1):   _sens(UNIT_AMPERE, 3, DEVICE_CLASS_CURRENT),
+    cv.Optional(CONF_S_I2):   _sens(UNIT_AMPERE, 3, DEVICE_CLASS_CURRENT),
+    cv.Optional(CONF_S_I3):   _sens(UNIT_AMPERE, 3, DEVICE_CLASS_CURRENT),
+    # per-phase active
+    cv.Optional(CONF_S_PA):   _sens(UNIT_WATT, 0, DEVICE_CLASS_POWER),
+    cv.Optional(CONF_S_PB):   _sens(UNIT_WATT, 0, DEVICE_CLASS_POWER),
+    cv.Optional(CONF_S_PC):   _sens(UNIT_WATT, 0, DEVICE_CLASS_POWER),
+    # per-phase reactive
+    cv.Optional(CONF_S_QA):   _sens(UNIT_KILOVOLT_AMPS_REACTIVE, 0),
+    cv.Optional(CONF_S_QB):   _sens(UNIT_KILOVOLT_AMPS_REACTIVE, 0),
+    cv.Optional(CONF_S_QC):   _sens(UNIT_KILOVOLT_AMPS_REACTIVE, 0),
+    # per-phase apparent
+    cv.Optional(CONF_S_SA):   _sens(UNIT_VOLT_AMPS, 0),
+    cv.Optional(CONF_S_SB):   _sens(UNIT_VOLT_AMPS, 0),
+    cv.Optional(CONF_S_SC):   _sens(UNIT_VOLT_AMPS, 0),
+    # per-phase cos
+    cv.Optional(CONF_S_CA):   _sens(UNIT_EMPTY, 3),
+    cv.Optional(CONF_S_CB):   _sens(UNIT_EMPTY, 3),
+    cv.Optional(CONF_S_CC):   _sens(UNIT_EMPTY, 3),
+    # misc
+    cv.Optional(CONF_S_TEMP): _sens(UNIT_CELSIUS, 0, DEVICE_CLASS_TEMPERATURE, icon=ICON_THERMOMETER),
+    cv.Optional(CONF_S_BAT):  _sens(UNIT_PERCENT, 0, DEVICE_CLASS_BATTERY),
 
-    # Текстовые сенсоры
-    cv.Optional(CONF_T_TARIFF): _ts(CONF_T_TARIFF),
-    cv.Optional(CONF_T_RELAY):  _ts(CONF_T_RELAY),
-    cv.Optional(CONF_T_SEAL):   _ts(CONF_T_SEAL),
-    cv.Optional(CONF_T_TYPE):   _ts(CONF_T_TYPE),
-    cv.Optional(CONF_T_FW):     _ts(CONF_T_FW),
-    cv.Optional(CONF_T_DATE):   _ts(CONF_T_DATE),
-    cv.Optional(CONF_T_TIME):   _ts(CONF_T_TIME),
-    cv.Optional(CONF_T_WORK):   _ts(CONF_T_WORK),
-    cv.Optional(CONF_T_SYNC):   _ts(CONF_T_SYNC),
-    cv.Optional(CONF_T_SERIAL): _ts(CONF_T_SERIAL),
-    cv.Optional(CONF_T_ABON):   _ts(CONF_T_ABON),
-    cv.Optional(CONF_T_STATUS): _ts(CONF_T_STATUS),
+    # text sensors
+    cv.Optional(CONF_T_TARIFF): text_sensor.text_sensor_schema(),
+    cv.Optional(CONF_T_RELAY):  text_sensor.text_sensor_schema(),
+    cv.Optional(CONF_T_SEAL):   text_sensor.text_sensor_schema(),
+    cv.Optional(CONF_T_TYPE):   text_sensor.text_sensor_schema(),
+    cv.Optional(CONF_T_FW):     text_sensor.text_sensor_schema(),
+    cv.Optional(CONF_T_DATE):   text_sensor.text_sensor_schema(),
+    cv.Optional(CONF_T_TIME):   text_sensor.text_sensor_schema(),
+    cv.Optional(CONF_T_WORK):   text_sensor.text_sensor_schema(),
+    cv.Optional(CONF_T_SYNC):   text_sensor.text_sensor_schema(),
+    cv.Optional(CONF_T_SERIAL): text_sensor.text_sensor_schema(),
+    cv.Optional(CONF_T_ABON):   text_sensor.text_sensor_schema(),
+    cv.Optional(CONF_T_STATUS): text_sensor.text_sensor_schema(),
 
-    # Бинарные сенсоры
-    cv.Optional(CONF_B_3PHASE): _bs(CONF_B_3PHASE),
-    cv.Optional(CONF_B_RELAY):  _bs(CONF_B_RELAY,  device_class=DEVICE_CLASS_POWER),
-    cv.Optional(CONF_B_SEAL):   _bs(CONF_B_SEAL),
-    cv.Optional(CONF_B_CC):     _bs(CONF_B_CC,     device_class=DEVICE_CLASS_CONNECTIVITY),
-}).extend(cv.COMPONENT_SCHEMA)
+    # binary sensors
+    cv.Optional(CONF_B_3PHASE):  binary_sensor.binary_sensor_schema(),
+    cv.Optional(CONF_B_RELAY):   binary_sensor.binary_sensor_schema(device_class=DEVICE_CLASS_POWER),
+    cv.Optional(CONF_B_SEAL_OK): binary_sensor.binary_sensor_schema(device_class=DEVICE_CLASS_SAFETY),
+    cv.Optional(CONF_B_CC1101):  binary_sensor.binary_sensor_schema(device_class=DEVICE_CLASS_CONNECTIVITY),
+}).extend(cv.polling_component_schema("300s"))
 
 
 async def to_code(config):
-    var = cg.new_Pvariable(
-        config[CONF_ID],
-        config[CONF_METER_ADDRESS],
-        config[CONF_CS_PIN],
-        config[CONF_GDO0_PIN],
-    )
+    var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
 
-    # Сенсоры ss[]
-    for i, key in enumerate(_SS_KEYS):
-        if key in config:
-            sens = await sensor.new_sensor(config[key])
-            cg.add(var.set_sensor(i, sens))
+    cs   = await cg.gpio_pin_expression(config[CONF_CS_PIN])
+    gdo0 = await cg.gpio_pin_expression(config[CONF_GDO0_PIN])
+    cg.add(var.set_cs_pin(cs))
+    cg.add(var.set_gdo0_pin(gdo0))
+    cg.add(var.set_meter_address(config[CONF_METER_ADDR]))
 
-    # Текстовые ts[]
-    for i, key in enumerate(_TS_KEYS):
-        if key in config:
-            ts = await text_sensor.new_text_sensor(config[key])
-            cg.add(var.set_text_sensor(i, ts))
+    SENSORS = [
+        CONF_S_SUM, CONF_S_T1, CONF_S_T2, CONF_S_T3,
+        CONF_S_SUM_R, CONF_S_T1_R, CONF_S_T2_R, CONF_S_T3_R,
+        CONF_S_KW, CONF_S_KVAR, CONF_S_FREQ, CONF_S_COS,
+        CONF_S_V1, CONF_S_V2, CONF_S_V3,
+        CONF_S_I1, CONF_S_I2, CONF_S_I3,
+        CONF_S_PA, CONF_S_PB, CONF_S_PC,
+        CONF_S_QA, CONF_S_QB, CONF_S_QC,
+        CONF_S_SA, CONF_S_SB, CONF_S_SC,
+        CONF_S_CA, CONF_S_CB, CONF_S_CC,
+        CONF_S_TEMP, CONF_S_BAT,
+    ]
+    for idx, key in enumerate(SENSORS):
+        if cfg := config.get(key):
+            s = await sensor.new_sensor(cfg)
+            cg.add(var.set_sensor(idx, s))
 
-    # Бинарные bs[]
-    for i, key in enumerate(_BS_KEYS):
-        if key in config:
-            bs = await binary_sensor.new_binary_sensor(config[key])
-            cg.add(var.set_binary_sensor(i, bs))
+    TEXT_SENSORS = [
+        CONF_T_TARIFF, CONF_T_RELAY, CONF_T_SEAL, CONF_T_TYPE,
+        CONF_T_FW, CONF_T_DATE, CONF_T_TIME, CONF_T_WORK,
+        CONF_T_SYNC, CONF_T_SERIAL, CONF_T_ABON, CONF_T_STATUS,
+    ]
+    for idx, key in enumerate(TEXT_SENSORS):
+        if cfg := config.get(key):
+            ts = await text_sensor.new_text_sensor(cfg)
+            cg.add(var.set_text_sensor(idx, ts))
+
+    BINARY_SENSORS = [CONF_B_3PHASE, CONF_B_RELAY, CONF_B_SEAL_OK, CONF_B_CC1101]
+    for idx, key in enumerate(BINARY_SENSORS):
+        if cfg := config.get(key):
+            bs = await binary_sensor.new_binary_sensor(cfg)
+            cg.add(var.set_binary_sensor(idx, bs))
